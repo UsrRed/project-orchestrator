@@ -12,6 +12,7 @@ import {
   type CoworkOptionsData,
 } from "@/lib/conversation";
 import { listRunsForTask } from "@/lib/runs";
+import { listPhaseNormes } from "@/lib/normes";
 import { getCurrentUserId } from "@/lib/users";
 import { setModeAction } from "./actions";
 
@@ -33,11 +34,12 @@ export default async function TaskChatPage({
   const ctx = await getTaskContext(userId, taskId);
   if (!ctx) notFound();
 
-  const [messages, artifacts, cowork, runs] = await Promise.all([
+  const [messages, artifacts, cowork, runs, norms] = await Promise.all([
     listMessages(userId, taskId),
     listArtifacts(userId, taskId),
     getCoworkStatus(userId, taskId),
     listRunsForTask(userId, taskId),
+    listPhaseNormes(userId, ctx.phaseId),
   ]);
 
   return (
@@ -77,6 +79,24 @@ export default async function TaskChatPage({
           </form>
         </div>
       </div>
+
+      {/* Normes injectées en préprompt (M5) — traçabilité */}
+      {norms.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-900/40 bg-emerald-950/10 px-4 py-2 text-xs">
+          <span className="uppercase tracking-wide text-emerald-500">
+            Normes injectées au contexte
+          </span>
+          {norms.map((n) => (
+            <span
+              key={n.id}
+              className="rounded-full border border-emerald-900/60 px-2 py-0.5 text-emerald-300"
+            >
+              {n.autoApplied ? "⚙️ " : ""}
+              {n.name}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Fil de discussion */}
       <section className="flex flex-col gap-3 rounded-xl border border-neutral-800 bg-neutral-900/40 p-5">

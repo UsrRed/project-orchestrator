@@ -16,6 +16,7 @@ import { buildModel, selectModel, type ProviderKeys } from "@/lib/llm-router";
 import { computeCostUsd } from "@/lib/models";
 import { addArtifact, addMessage, getTaskContext, listMessages } from "@/lib/conversation";
 import { recordExecution } from "@/lib/executions";
+import { buildPhaseNormsContext } from "@/lib/normes";
 import type { StepFn, WorkerDeps } from "@/lib/worker";
 
 const stepSchema = z.object({
@@ -56,11 +57,14 @@ export function makeAutonomousDeps(
     if (!apiKey) throw new Error(`Clé manquante pour ${spec.provider}.`);
     const model = buildModel(spec, apiKey);
 
+    const norms = await buildPhaseNormsContext(userId, taskCtx.phaseId);
+
     const startedAt = new Date();
     const { object, usage } = await generateObject({
       model,
       schema: stepSchema,
       system:
+        (norms.text ? norms.text + "\n\n" : "") +
         `Tu es un agent autonome travaillant sur la tâche « ${taskCtx.taskTitle} » ` +
         `du projet « ${taskCtx.projectName} » (${taskCtx.projectType}). ` +
         "Avance par petites étapes concrètes vers l'objectif. Quand il est " +

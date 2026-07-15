@@ -9,6 +9,11 @@ import {
 } from "@/lib/architect";
 import { getDecryptedProviderKeys } from "@/lib/keys";
 import { recordExecution } from "@/lib/executions";
+import {
+  associateNorme,
+  autoAssociateProjectNorms,
+  dissociateNorme,
+} from "@/lib/normes";
 import { getCurrentUserId } from "@/lib/users";
 import {
   addPhase,
@@ -71,6 +76,8 @@ export async function generateProjectAction(
       type,
       result.architecture,
     );
+    // Auto-association des normes dont la catégorie ↔ type de phase (M5).
+    await autoAssociateProjectNorms(userId, projectId);
     await recordExecution({
       userId,
       taskLabel: `[architecture] ${result.architecture.projectName}`,
@@ -166,6 +173,28 @@ export async function deleteTaskAction(formData: FormData): Promise<void> {
   if (!taskId) return;
   const userId = await getCurrentUserId();
   await deleteTask(userId, taskId);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+// --- Association de normes aux phases (M5) -------------------------------
+
+export async function associateNormeAction(formData: FormData): Promise<void> {
+  const phaseId = String(formData.get("phaseId") ?? "");
+  const normeId = String(formData.get("normeId") ?? "");
+  const projectId = String(formData.get("projectId") ?? "");
+  if (!phaseId || !normeId) return;
+  const userId = await getCurrentUserId();
+  await associateNorme(userId, phaseId, normeId, false);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function dissociateNormeAction(formData: FormData): Promise<void> {
+  const phaseId = String(formData.get("phaseId") ?? "");
+  const normeId = String(formData.get("normeId") ?? "");
+  const projectId = String(formData.get("projectId") ?? "");
+  if (!phaseId || !normeId) return;
+  const userId = await getCurrentUserId();
+  await dissociateNorme(userId, phaseId, normeId);
   revalidatePath(`/projects/${projectId}`);
 }
 

@@ -26,6 +26,7 @@ import {
 export interface TaskContext {
   taskId: string;
   projectId: string;
+  phaseId: string;
   taskTitle: string;
   taskDescription: string | null;
   taskStatus: string;
@@ -46,6 +47,7 @@ export async function getTaskContext(
     .select({
       taskId: tasks.id,
       projectId: projects.id,
+      phaseId: phases.id,
       taskTitle: tasks.title,
       taskDescription: tasks.description,
       taskStatus: tasks.status,

@@ -18,6 +18,7 @@ import {
 } from "@/lib/conversation";
 import { recordExecution } from "@/lib/executions";
 import { getDecryptedProviderKeys } from "@/lib/keys";
+import { buildPhaseNormsContext } from "@/lib/normes";
 import { enqueueRun, requestKill } from "@/lib/runs";
 import { getCurrentUserId } from "@/lib/users";
 import type { TaskMode } from "@/lib/projects";
@@ -112,11 +113,12 @@ export async function sendMessageAction(
 
   await addMessage(taskId, { role: "user", content: text });
   const history = await buildHistory(userId, taskId);
+  const norms = await buildPhaseNormsContext(userId, ctx.phaseId);
   const startedAt = new Date();
 
   try {
     if (ctx.taskMode === "cowork") {
-      const res = await proposeCoworkOptions(ctx, history, keys);
+      const res = await proposeCoworkOptions(ctx, history, keys, norms.text);
       const rendered =
         res.data.intro +
         "\n\n" +
@@ -131,7 +133,7 @@ export async function sendMessageAction(
       });
       await record(userId, `[cowork:options] ${ctx.taskTitle}`, res, "succeeded", startedAt);
     } else {
-      const res = await manualReply(ctx, history, keys);
+      const res = await manualReply(ctx, history, keys, norms.text);
       await addMessage(taskId, { role: "assistant", content: res.text });
       await record(userId, `[manuel] ${ctx.taskTitle}`, res, "succeeded", startedAt);
     }
@@ -247,10 +249,11 @@ export async function chooseOptionAction(
     data: { index },
   });
   const history = await buildHistory(userId, taskId);
+  const norms = await buildPhaseNormsContext(userId, ctx.phaseId);
   const startedAt = new Date();
 
   try {
-    const res = await produceCoworkArtifact(ctx, history, option, keys);
+    const res = await produceCoworkArtifact(ctx, history, option, keys, norms.text);
     const artifactId = await addArtifact(taskId, {
       type: "document",
       title: res.title,

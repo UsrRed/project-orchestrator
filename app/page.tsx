@@ -13,7 +13,7 @@ const MILESTONES: Array<{ id: string; label: string; done: boolean }> = [
   { id: "M2", label: "Agent Architecte", done: true },
   { id: "M3", label: "Modes Manuel + Cowork", done: true },
   { id: "M4", label: "Mode Autonome (Full-Auto)", done: true },
-  { id: "M5", label: "Bibliothèque de Normes/Skills", done: false },
+  { id: "M5", label: "Bibliothèque de Normes/Skills", done: true },
   { id: "M6", label: "UI adaptative + widgets", done: false },
 ];
 
@@ -43,15 +43,26 @@ export default async function Home() {
         </p>
       </header>
 
-      <Link
-        href="/projects"
-        className="flex items-center justify-between rounded-xl border border-emerald-800/60 bg-emerald-950/20 px-6 py-4 transition hover:border-emerald-600 hover:bg-emerald-950/40"
-      >
-        <span className="font-semibold text-emerald-200">
-          Agent Architecte — générer un projet depuis une idée →
-        </span>
-        <span className="text-xs text-emerald-500">Milestone 2</span>
-      </Link>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Link
+          href="/projects"
+          className="flex items-center justify-between rounded-xl border border-emerald-800/60 bg-emerald-950/20 px-6 py-4 transition hover:border-emerald-600 hover:bg-emerald-950/40"
+        >
+          <span className="font-semibold text-emerald-200">
+            Agent Architecte — projets →
+          </span>
+          <span className="text-xs text-emerald-500">M2–M4</span>
+        </Link>
+        <Link
+          href="/normes"
+          className="flex items-center justify-between rounded-xl border border-neutral-700 bg-neutral-900/40 px-6 py-4 transition hover:border-emerald-600 hover:bg-neutral-900/70"
+        >
+          <span className="font-semibold text-neutral-200">
+            Bibliothèque de normes →
+          </span>
+          <span className="text-xs text-neutral-500">M5</span>
+        </Link>
+      </div>
 
       <section className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">
         <h2 className="mb-1 text-lg font-semibold">Clés API</h2>

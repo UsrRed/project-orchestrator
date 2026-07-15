@@ -24,14 +24,17 @@ import type { CoworkOptionsData, TaskContext } from "@/lib/conversation";
 
 // --- Contexte système ----------------------------------------------------
 
-function systemPrompt(ctx: TaskContext): string {
-  return [
+function systemPrompt(ctx: TaskContext, normsText?: string): string {
+  const lines = [
     `Tu assistes sur une tâche d'un projet ${ctx.projectType}.`,
     `Projet : « ${ctx.projectName} »${ctx.projectIdea ? ` — ${ctx.projectIdea}` : ""}.`,
     `Phase : « ${ctx.phaseName} »${ctx.phaseType ? ` (${ctx.phaseType})` : ""}.`,
     `Tâche : « ${ctx.taskTitle} »${ctx.taskDescription ? ` — ${ctx.taskDescription}` : ""}.`,
     "Sois concret, concis et actionnable. Réponds en français.",
-  ].join("\n");
+  ];
+  // Injection des Normes/Skills de la phase (M5), en tête pour priorité.
+  if (normsText && normsText.trim()) lines.unshift(normsText.trim(), "");
+  return lines.join("\n");
 }
 
 export interface HistoryMessage {
@@ -86,11 +89,12 @@ export async function manualReply(
   ctx: TaskContext,
   history: HistoryMessage[],
   keys: ProviderKeys,
+  normsText?: string,
 ): Promise<ManualResult> {
   const { spec, model } = modelFor("fast", keys);
   const { text, usage } = await generateText({
     model,
-    system: systemPrompt(ctx),
+    system: systemPrompt(ctx, normsText),
     messages: toCoreMessages(history),
   });
   return { text, ...metaFrom(spec, "fast", usage) };
@@ -124,13 +128,14 @@ export async function proposeCoworkOptions(
   ctx: TaskContext,
   history: HistoryMessage[],
   keys: ProviderKeys,
+  normsText?: string,
 ): Promise<OptionsResult> {
   const { spec, model } = modelFor("frontier", keys);
   const { object, usage } = await generateObject({
     model,
     schema: coworkOptionsSchema,
     system:
-      systemPrompt(ctx) +
+      systemPrompt(ctx, normsText) +
       "\n\nMode COWORK : propose 3 options distinctes pour avancer, puis " +
       "attends le choix de l'utilisateur. Ne tranche pas à sa place.",
     messages: toCoreMessages(history),
@@ -159,13 +164,14 @@ export async function produceCoworkArtifact(
   history: HistoryMessage[],
   chosenOption: { title: string; detail: string },
   keys: ProviderKeys,
+  normsText?: string,
 ): Promise<ArtifactResult> {
   const { spec, model } = modelFor("frontier", keys);
   const { object, usage } = await generateObject({
     model,
     schema: artifactSchema,
     system:
-      systemPrompt(ctx) +
+      systemPrompt(ctx, normsText) +
       "\n\nMode COWORK : l'utilisateur a choisi une option. Produis " +
       "l'artefact correspondant (document Markdown), concret et complet.",
     prompt:

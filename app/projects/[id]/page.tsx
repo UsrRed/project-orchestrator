@@ -3,13 +3,16 @@ import { notFound } from "next/navigation";
 
 import { AutoSubmitSelect } from "@/components/auto-submit-select";
 import { getProjectTree } from "@/lib/projects";
+import { listNormesForProject, listPhaseNormes } from "@/lib/normes";
 import { getCurrentUserId } from "@/lib/users";
 import {
   addPhaseAction,
   addTaskAction,
+  associateNormeAction,
   deletePhaseAction,
   deleteProjectAction,
   deleteTaskAction,
+  dissociateNormeAction,
   renameProjectAction,
   updatePhaseAction,
   updateTaskAction,
@@ -49,6 +52,17 @@ export default async function ProjectDetailPage({
   const userId = await getCurrentUserId();
   const project = await getProjectTree(userId, id);
   if (!project) notFound();
+
+  // Normes disponibles + normes associées par phase (M5).
+  const availableNormes = await listNormesForProject(userId, id);
+  const phaseNormes = new Map(
+    await Promise.all(
+      project.phases.map(
+        async (p) =>
+          [p.id, await listPhaseNormes(userId, p.id)] as const,
+      ),
+    ),
+  );
 
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-8 px-6 py-16">
@@ -131,6 +145,53 @@ export default async function ProjectDetailPage({
                   ✕
                 </button>
               </form>
+            </div>
+
+            {/* Normes de la phase (M5) — injectées en préprompt */}
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <span className="text-[11px] uppercase tracking-wide text-neutral-600">
+                Normes
+              </span>
+              {(phaseNormes.get(phase.id) ?? []).map((n) => (
+                <span
+                  key={n.id}
+                  className="flex items-center gap-1 rounded-full border border-emerald-900/60 bg-emerald-950/20 px-2 py-0.5 text-xs text-emerald-300"
+                  title={n.autoApplied ? "Associée automatiquement" : "Associée manuellement"}
+                >
+                  {n.autoApplied && <span title="auto">⚙️</span>}
+                  {n.name}
+                  <form action={dissociateNormeAction} className="inline">
+                    <input type="hidden" name="phaseId" value={phase.id} />
+                    <input type="hidden" name="normeId" value={n.id} />
+                    <input type="hidden" name="projectId" value={project.id} />
+                    <button
+                      type="submit"
+                      className="text-emerald-500/70 hover:text-red-400"
+                      title="Détacher"
+                    >
+                      ×
+                    </button>
+                  </form>
+                </span>
+              ))}
+              {availableNormes.length > 0 && (
+                <form action={associateNormeAction} className="inline">
+                  <input type="hidden" name="phaseId" value={phase.id} />
+                  <input type="hidden" name="projectId" value={project.id} />
+                  <AutoSubmitSelect
+                    name="normeId"
+                    defaultValue=""
+                    title="Associer une norme"
+                    options={[
+                      { value: "", label: "+ associer une norme…" },
+                      ...availableNormes.map((n) => ({
+                        value: n.id,
+                        label: n.name,
+                      })),
+                    ]}
+                  />
+                </form>
+              )}
             </div>
 
             <ul className="flex flex-col gap-2">
