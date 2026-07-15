@@ -2,11 +2,12 @@
 
 Plateforme de gestion de projet pilotée par **orchestration dynamique d'IA** : au lieu de cocher des tâches statiques, un routeur intelligent découpe une idée en phases, puis distribue le travail aux modèles d'IA les plus rentables et compétents selon la complexité et la taille du contexte.
 
-Ce dépôt implémente jusqu'au **Milestone 2 (Agent Architecte)** :
+Ce dépôt implémente jusqu'au **Milestone 3 (Modes Manuel + Cowork)** :
 
 - **M0** — walking skeleton (Next.js 15 / TS strict, schéma Drizzle, CI).
 - **M1** — clés API multi-provider **chiffrées** (AES-256-GCM), routage + exécution réelle, **coût réel** journalisé dans `agent_executions`.
-- **M2** — un **agent architecte** transforme une idée en langage naturel en arborescence `Projet → Phases → Tâches` (sortie structurée Zod), **éditable** (ajout/renommage/statut/mode/priorité/suppression) depuis `/projects`.
+- **M2** — un **agent architecte** transforme une idée en langage naturel en arborescence `Projet → Phases → Tâches` (sortie structurée Zod), **éditable** depuis `/projects`.
+- **M3** — **chat par tâche** avec bascule de mode : **Manuel** (réponse réactive, tier `fast`) et **Cowork** (l'agent propose des options, s'arrête sur un **point d'arrêt** persisté en base, puis produit un **`Artifact`** après le choix de l'utilisateur, tier `frontier`).
 
 Voir [`orchestrato_ai_concept.md`](orchestrato_ai_concept.md) pour la vision fonctionnelle et [`orchestrato_ai_development_plan.md`](orchestrato_ai_development_plan.md) pour le plan de développement complet.
 
@@ -30,11 +31,15 @@ app/
     actions.ts        Server Actions : génération + édition d'arborescence
     new-project-form.tsx  Formulaire client (idée → génération)
     [id]/page.tsx     Arborescence éditable d'un projet
+  tasks/
+    [taskId]/page.tsx   Chat par tâche (fil + artefacts) + bascule de mode
+    [taskId]/actions.ts  Server Actions : envoi, choix Cowork, mode
 components/
   keys-manager.tsx    Formulaire client d'ajout/suppression de clés (masquées)
   router-demo.tsx     Formulaire client de test du routeur
   executions-list.tsx Historique + agrégats de coût réel
   auto-submit-select.tsx  <select> qui soumet au changement (édition inline)
+  task-chat.tsx       Composeur client + boutons de choix Cowork
 drizzle/
   schema.ts           Schéma complet (User, ApiKey, Project, Phase, Task,
                       AgentExecution, Message, Artifact, Norme, Budget…)
@@ -47,9 +52,16 @@ lib/
   executions.ts       Persistance/lecture des exécutions (coût réel)
   architect.ts        Agent architecte : idée → arborescence (schéma Zod)
   projects.ts         Persistance + édition des projets/phases/tâches
+  conversation.ts     Fil par tâche, artefacts, état de la machine Cowork
+  agent.ts            Agent conversationnel (Manuel/Cowork) via le routeur
   models.ts           Catalogue de modèles + tarification (calcul du coût réel)
   llm-router.ts       Routeur : classification heuristique → sélection → appel
 ```
+
+> **Note d'architecture (M3)** — le point d'arrêt Cowork est une machine à états
+> **persistée en base** (la conversation est déjà durable). LangGraph.js n'est
+> pas introduit tant qu'un vrai graphe multi-nœuds n'est pas nécessaire, pour
+> limiter le coût d'orchestration (risque #4 du plan).
 
 ## Démarrage
 
@@ -97,6 +109,6 @@ Puis il sélectionne le meilleur provider **disponible** (clé fournie) selon un
 
 `.github/workflows/ci.yml` exécute lint + typecheck + build sur chaque push/PR vers `main`.
 
-## Prochaine étape — Milestone 3
+## Prochaine étape — Milestone 4
 
-Modes Manuel + Cowork (synchrones) : espace de discussion par tâche, mode Manuel réactif, mode Cowork avec point d'arrêt explicite (LangGraph.js `interrupt`/checkpoint) — l'agent propose des options, l'utilisateur choisit, un `Artifact` est produit et sauvegardé.
+Mode Autonome (Full-Auto) : intégration d'une queue durable (Trigger.dev / Inngest), chaîne de tâches en arrière-plan avec garde-fous stricts (itérations max, plafond de coût vérifié à chaque étape, timeout, kill switch) et notifications de fin de run.

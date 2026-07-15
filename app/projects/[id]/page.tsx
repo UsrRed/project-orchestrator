@@ -179,6 +179,13 @@ export default async function ProjectDetailPage({
                       title="Statut"
                     />
                   </form>
+                  <Link
+                    href={`/tasks/${task.id}`}
+                    className="rounded border border-neutral-700 px-2 py-1 text-xs text-neutral-300 transition hover:border-emerald-600 hover:text-emerald-400"
+                    title="Ouvrir la discussion (Manuel / Cowork)"
+                  >
+                    Discuter →
+                  </Link>
                   <form action={deleteTaskAction}>
                     <input type="hidden" name="taskId" value={task.id} />
                     <input type="hidden" name="projectId" value={project.id} />

@@ -14,6 +14,7 @@ import { relations } from "drizzle-orm";
 import {
   boolean,
   integer,
+  jsonb,
   numeric,
   pgEnum,
   pgTable,
@@ -197,6 +198,14 @@ export const messages = pgTable("messages", {
     .references(() => tasks.id, { onDelete: "cascade" }),
   role: messageRoleEnum("role").notNull(),
   content: text("content").notNull(),
+  /**
+   * Nature du message pour le rendu et la machine à états Cowork :
+   * 'text' (défaut), 'cowork_options' (l'agent propose des options et attend),
+   * 'cowork_choice' (l'utilisateur a choisi), 'artifact' (un artefact a été produit).
+   */
+  kind: text("kind").notNull().default("text"),
+  /** Charge structurée éventuelle (ex: liste d'options Cowork, réf. d'artefact). */
+  data: jsonb("data"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
