@@ -63,6 +63,7 @@ export function makeAutonomousDeps(
     const { object, usage } = await generateObject({
       model,
       schema: stepSchema,
+      mode: "json",
       system:
         (norms.text ? norms.text + "\n\n" : "") +
         `Tu es un agent autonome travaillant sur la tâche « ${taskCtx.taskTitle} » ` +

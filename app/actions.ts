@@ -174,6 +174,7 @@ const VALID_PROVIDERS: ReadonlySet<string> = new Set<Provider>([
   "google",
   "openrouter",
   "groq",
+  "ollama",
 ]);
 
 export async function addKeyAction(

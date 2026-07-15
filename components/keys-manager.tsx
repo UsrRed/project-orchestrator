@@ -8,6 +8,7 @@ import type { ApiKeyView } from "@/lib/keys";
 const INITIAL: KeyFormState = { ok: false, message: "" };
 
 const PROVIDERS: Array<{ value: string; label: string }> = [
+  { value: "ollama", label: "Local (LM Studio / Ollama)" },
   { value: "anthropic", label: "Anthropic (Claude)" },
   { value: "openai", label: "OpenAI (GPT)" },
   { value: "google", label: "Google (Gemini)" },

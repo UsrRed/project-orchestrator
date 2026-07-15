@@ -146,8 +146,9 @@ export function classify(req: RouteRequest): Classification {
 
 /** Ordre de préférence par tier (le moins cher / le plus adapté d'abord). */
 const PREFERENCE: Record<Tier, readonly Provider[]> = {
-  fast: ["groq", "google", "openai", "openrouter", "anthropic"],
-  frontier: ["anthropic", "openai", "google", "openrouter", "groq"],
+  // Le local (ollama/LM Studio) est gratuit → préféré quand disponible.
+  fast: ["ollama", "groq", "google", "openai", "openrouter", "anthropic"],
+  frontier: ["ollama", "anthropic", "openai", "google", "openrouter", "groq"],
 };
 
 /**
@@ -187,6 +188,22 @@ export function buildModel(spec: ModelSpec, apiKey: string): LanguageModel {
         apiKey,
         baseURL: "https://openrouter.ai/api/v1",
       })(spec.modelId);
+    case "ollama": {
+      // Serveur local OpenAI-compatible (LM Studio / Ollama). La clé n'est pas
+      // requise par le serveur local ; base URL configurable. On active les
+      // structured outputs (response_format json_schema) — LM Studio n'accepte
+      // pas le tool-mode ni json_object, seulement json_schema.
+      const local = createOpenAICompatible({
+        name: "local",
+        apiKey: apiKey || "local",
+        baseURL: process.env.LOCAL_AI_BASE_URL ?? "http://localhost:1234/v1",
+      });
+      return local.chatModel(
+        spec.modelId,
+        {},
+        { supportsStructuredOutputs: true, defaultObjectGenerationMode: "json" },
+      );
+    }
     default: {
       const _exhaustive: never = spec.provider;
       throw new Error(`Provider non géré : ${String(_exhaustive)}`);

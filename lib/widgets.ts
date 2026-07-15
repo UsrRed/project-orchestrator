@@ -116,6 +116,7 @@ export async function generateWidget(
   const { object, usage } = await generateObject({
     model,
     schema: widgetSchema,
+    mode: "json",
     system:
       `Tu génères un widget d'aide à la décision pour la tâche « ${ctx.taskTitle} » ` +
       `(projet ${ctx.projectType}). ${WIDGET_HINT}`,

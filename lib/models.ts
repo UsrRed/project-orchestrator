@@ -14,7 +14,8 @@ export type Provider =
   | "openai"
   | "google"
   | "openrouter"
-  | "groq";
+  | "groq"
+  | "ollama";
 
 export type Tier = "fast" | "frontier";
 
@@ -31,7 +32,31 @@ export interface ModelSpec {
   contextWindow: number;
 }
 
+/**
+ * Modèle local (serveur OpenAI-compatible : LM Studio / Ollama), configurable
+ * via `LOCAL_AI_MODEL`. Coût nul (inférence locale) → candidat idéal du routeur
+ * pour les tâches à optimiser financièrement.
+ */
+export const LOCAL_MODEL_ID = process.env.LOCAL_AI_MODEL ?? "qwen-active";
+
 export const MODEL_CATALOG: readonly ModelSpec[] = [
+  // --- Local (LM Studio / Ollama), OpenAI-compatible, gratuit ---
+  {
+    provider: "ollama",
+    modelId: LOCAL_MODEL_ID,
+    tier: "fast",
+    inputPerMTok: 0,
+    outputPerMTok: 0,
+    contextWindow: 32_768,
+  },
+  {
+    provider: "ollama",
+    modelId: LOCAL_MODEL_ID,
+    tier: "frontier",
+    inputPerMTok: 0,
+    outputPerMTok: 0,
+    contextWindow: 32_768,
+  },
   // --- Anthropic ---
   {
     provider: "anthropic",

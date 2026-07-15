@@ -134,6 +134,7 @@ export async function proposeCoworkOptions(
   const { object, usage } = await generateObject({
     model,
     schema: coworkOptionsSchema,
+    mode: "json",
     system:
       systemPrompt(ctx, normsText) +
       "\n\nMode COWORK : propose 3 options distinctes pour avancer, puis " +
@@ -170,6 +171,7 @@ export async function produceCoworkArtifact(
   const { object, usage } = await generateObject({
     model,
     schema: artifactSchema,
+    mode: "json",
     system:
       systemPrompt(ctx, normsText) +
       "\n\nMode COWORK : l'utilisateur a choisi une option. Produis " +

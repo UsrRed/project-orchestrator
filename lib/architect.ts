@@ -110,6 +110,9 @@ export async function generateArchitecture(
   const { object, usage } = await generateObject({
     model,
     schema: architectureSchema,
+    // json-mode (response_format) plutôt que tool-mode : compatible avec les
+    // serveurs OpenAI-compatible locaux (LM Studio) comme avec le cloud.
+    mode: "json",
     system: SYSTEM_BY_TYPE[projectType],
     prompt:
       `Idée de projet (${projectType}) :\n"""${trimmed}"""\n\n` +

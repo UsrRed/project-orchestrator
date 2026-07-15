@@ -108,6 +108,8 @@ Le classifieur heuristique (`lib/llm-router.ts`) choisit un *tier* :
 - **fast** — tâches simples / faible contexte (traduction, formatage, validation) → modèles économiques (Groq Llama, Gemini Flash, GPT-4o-mini…)
 - **frontier** — tâches complexes / grand contexte (recherche, architecture, code) → modèles haut de gamme (Claude 3.5 Sonnet, GPT-4o, Gemini 1.5 Pro…)
 
+Un **modèle local** (LM Studio / Ollama, OpenAI-compatible via `LOCAL_AI_BASE_URL`) est pris en charge comme provider `ollama` : coût nul, donc **préféré par le routeur** quand une clé locale est enregistrée. Toute la chaîne (routage, architecte, chat, Cowork, runs autonomes, widgets) a été validée de bout en bout contre un modèle local (qwen3-coder-30b).
+
 Puis il sélectionne le meilleur provider **disponible** (clé fournie) selon un ordre de préférence par tier, exécute l'appel via l'AI SDK, et calcule le **coût réel** (tarification dans `lib/models.ts`) destiné à être journalisé dans la table `agent_executions` — la table de vérité du suivi budgétaire.
 
 ## Scripts
