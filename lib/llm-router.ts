@@ -167,7 +167,7 @@ export function selectModel(tier: Tier, keys: ProviderKeys): ModelSpec {
 
 // --- Instanciation du modèle SDK ----------------------------------------
 
-function buildModel(spec: ModelSpec, apiKey: string): LanguageModel {
+export function buildModel(spec: ModelSpec, apiKey: string): LanguageModel {
   switch (spec.provider) {
     case "anthropic":
       return createAnthropic({ apiKey })(spec.modelId);

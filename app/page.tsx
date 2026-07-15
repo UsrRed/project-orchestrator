@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 import { ExecutionsList } from "@/components/executions-list";
 import { KeysManager } from "@/components/keys-manager";
 import { RouterDemo } from "@/components/router-demo";
@@ -8,7 +10,7 @@ import { getCurrentUserId } from "@/lib/users";
 const MILESTONES: Array<{ id: string; label: string; done: boolean }> = [
   { id: "M0", label: "Fondations + walking skeleton", done: true },
   { id: "M1", label: "Routeur d'Intelligence minimal", done: true },
-  { id: "M2", label: "Agent Architecte", done: false },
+  { id: "M2", label: "Agent Architecte", done: true },
   { id: "M3", label: "Modes Manuel + Cowork", done: false },
   { id: "M4", label: "Mode Autonome (Full-Auto)", done: false },
   { id: "M5", label: "Bibliothèque de Normes/Skills", done: false },
@@ -40,6 +42,16 @@ export default async function Home() {
           journalise le <strong>coût réel</strong>.
         </p>
       </header>
+
+      <Link
+        href="/projects"
+        className="flex items-center justify-between rounded-xl border border-emerald-800/60 bg-emerald-950/20 px-6 py-4 transition hover:border-emerald-600 hover:bg-emerald-950/40"
+      >
+        <span className="font-semibold text-emerald-200">
+          Agent Architecte — générer un projet depuis une idée →
+        </span>
+        <span className="text-xs text-emerald-500">Milestone 2</span>
+      </Link>
 
       <section className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">
         <h2 className="mb-1 text-lg font-semibold">Clés API</h2>

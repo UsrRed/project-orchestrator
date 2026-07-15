@@ -2,7 +2,11 @@
 
 Plateforme de gestion de projet pilotée par **orchestration dynamique d'IA** : au lieu de cocher des tâches statiques, un routeur intelligent découpe une idée en phases, puis distribue le travail aux modèles d'IA les plus rentables et compétents selon la complexité et la taille du contexte.
 
-Ce dépôt implémente jusqu'au **Milestone 1 (Routeur d'Intelligence minimal)** : au-delà du walking skeleton M0, il gère désormais des **clés API multi-provider chiffrées** (AES-256-GCM), route et exécute de vrais appels avec ces clés, et **journalise le coût réel** de chaque exécution dans la table de vérité `agent_executions` — le tout testable depuis la page d'accueil.
+Ce dépôt implémente jusqu'au **Milestone 2 (Agent Architecte)** :
+
+- **M0** — walking skeleton (Next.js 15 / TS strict, schéma Drizzle, CI).
+- **M1** — clés API multi-provider **chiffrées** (AES-256-GCM), routage + exécution réelle, **coût réel** journalisé dans `agent_executions`.
+- **M2** — un **agent architecte** transforme une idée en langage naturel en arborescence `Projet → Phases → Tâches` (sortie structurée Zod), **éditable** (ajout/renommage/statut/mode/priorité/suppression) depuis `/projects`.
 
 Voir [`orchestrato_ai_concept.md`](orchestrato_ai_concept.md) pour la vision fonctionnelle et [`orchestrato_ai_development_plan.md`](orchestrato_ai_development_plan.md) pour le plan de développement complet.
 
@@ -21,10 +25,16 @@ app/
   actions.ts          Server Actions : routeur + CRUD clés + journalisation
   page.tsx            Accueil : clés API, démo routeur, suivi du coût, jalons
   layout.tsx          Shell
+  projects/
+    page.tsx          Liste des projets + création par l'architecte
+    actions.ts        Server Actions : génération + édition d'arborescence
+    new-project-form.tsx  Formulaire client (idée → génération)
+    [id]/page.tsx     Arborescence éditable d'un projet
 components/
   keys-manager.tsx    Formulaire client d'ajout/suppression de clés (masquées)
   router-demo.tsx     Formulaire client de test du routeur
   executions-list.tsx Historique + agrégats de coût réel
+  auto-submit-select.tsx  <select> qui soumet au changement (édition inline)
 drizzle/
   schema.ts           Schéma complet (User, ApiKey, Project, Phase, Task,
                       AgentExecution, Message, Artifact, Norme, Budget…)
@@ -35,6 +45,8 @@ lib/
   users.ts            Bootstrap utilisateur local (mono-compte, avant Auth.js)
   keys.ts             CRUD clés chiffrées + déchiffrement serveur pour le routeur
   executions.ts       Persistance/lecture des exécutions (coût réel)
+  architect.ts        Agent architecte : idée → arborescence (schéma Zod)
+  projects.ts         Persistance + édition des projets/phases/tâches
   models.ts           Catalogue de modèles + tarification (calcul du coût réel)
   llm-router.ts       Routeur : classification heuristique → sélection → appel
 ```
@@ -85,6 +97,6 @@ Puis il sélectionne le meilleur provider **disponible** (clé fournie) selon un
 
 `.github/workflows/ci.yml` exécute lint + typecheck + build sur chaque push/PR vers `main`.
 
-## Prochaine étape — Milestone 2
+## Prochaine étape — Milestone 3
 
-Agent Architecte : à partir d'une idée en langage naturel, générer (tool-calling + schéma Zod) une arborescence `Project → Phase → Task` cohérente, éditable et régénérable — persistée dans les tables déjà présentes au schéma.
+Modes Manuel + Cowork (synchrones) : espace de discussion par tâche, mode Manuel réactif, mode Cowork avec point d'arrêt explicite (LangGraph.js `interrupt`/checkpoint) — l'agent propose des options, l'utilisateur choisit, un `Artifact` est produit et sauvegardé.
