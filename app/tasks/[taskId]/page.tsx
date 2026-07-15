@@ -3,7 +3,10 @@ import { notFound } from "next/navigation";
 
 import { AutonomousPanel } from "@/components/autonomous-panel";
 import { AutoSubmitSelect } from "@/components/auto-submit-select";
+import { PhasePanel } from "@/components/phase-panel";
 import { TaskChat } from "@/components/task-chat";
+import { WidgetGenerator } from "@/components/widget-generator";
+import { WidgetRenderer } from "@/components/widget-renderer";
 import {
   getCoworkStatus,
   getTaskContext,
@@ -80,6 +83,9 @@ export default async function TaskChatPage({
         </div>
       </div>
 
+      {/* Panneau adaptatif par type de phase (M6) */}
+      <PhasePanel phaseName={ctx.phaseName} phaseType={ctx.phaseType} />
+
       {/* Normes injectées en préprompt (M5) — traçabilité */}
       {norms.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-900/40 bg-emerald-950/10 px-4 py-2 text-xs">
@@ -134,24 +140,44 @@ export default async function TaskChatPage({
         <AutonomousPanel taskId={taskId} runs={runs} />
       </section>
 
-      {/* Artefacts produits */}
+      {/* Widgets « generative UI » (M6) */}
+      <section className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5">
+        <h2 className="mb-1 text-lg font-semibold">Widget à la volée</h2>
+        <p className="mb-4 text-sm text-neutral-500">
+          Le modèle produit des <strong>données structurées</strong> (schéma
+          fixe), rendues par des composants whitelistés — jamais de code
+          exécuté côté client.
+        </p>
+        <WidgetGenerator taskId={taskId} />
+      </section>
+
+      {/* Artefacts produits (documents + widgets rendus) */}
       {artifacts.length > 0 && (
         <section className="flex flex-col gap-3">
           <h2 className="text-lg font-semibold">Artefacts</h2>
-          {artifacts.map((a) => (
-            <details
-              key={a.id}
-              className="rounded-xl border border-emerald-900/50 bg-emerald-950/10 p-4"
-            >
-              <summary className="cursor-pointer font-medium text-emerald-200">
-                {a.title ?? "Artefact"}{" "}
-                <span className="text-xs text-emerald-600">({a.type})</span>
-              </summary>
-              <pre className="mt-3 whitespace-pre-wrap text-sm text-neutral-300">
-                {a.content}
-              </pre>
-            </details>
-          ))}
+          {artifacts.map((a) =>
+            a.type === "widget" ? (
+              <div
+                key={a.id}
+                className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-4"
+              >
+                <WidgetRenderer raw={a.content} />
+              </div>
+            ) : (
+              <details
+                key={a.id}
+                className="rounded-xl border border-emerald-900/50 bg-emerald-950/10 p-4"
+              >
+                <summary className="cursor-pointer font-medium text-emerald-200">
+                  {a.title ?? "Artefact"}{" "}
+                  <span className="text-xs text-emerald-600">({a.type})</span>
+                </summary>
+                <pre className="mt-3 whitespace-pre-wrap text-sm text-neutral-300">
+                  {a.content}
+                </pre>
+              </details>
+            ),
+          )}
         </section>
       )}
     </main>

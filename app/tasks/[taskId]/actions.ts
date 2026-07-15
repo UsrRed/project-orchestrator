@@ -20,6 +20,7 @@ import { recordExecution } from "@/lib/executions";
 import { getDecryptedProviderKeys } from "@/lib/keys";
 import { buildPhaseNormsContext } from "@/lib/normes";
 import { enqueueRun, requestKill } from "@/lib/runs";
+import { generateWidget } from "@/lib/widgets";
 import { getCurrentUserId } from "@/lib/users";
 import type { TaskMode } from "@/lib/projects";
 import type { ModelSpec, Tier } from "@/lib/models";
@@ -146,6 +147,58 @@ export async function sendMessageAction(
 
   revalidatePath(`/tasks/${taskId}`);
   return { ok: true, message: "" };
+}
+
+// --- Widgets « generative UI » (M6) --------------------------------------
+
+export interface WidgetFormState {
+  ok: boolean;
+  message: string;
+}
+
+/** Génère un widget structuré (schéma Zod fixe) et le sauvegarde en Artifact. */
+export async function generateWidgetAction(
+  _prev: WidgetFormState,
+  formData: FormData,
+): Promise<WidgetFormState> {
+  const taskId = String(formData.get("taskId") ?? "");
+  const instruction = String(formData.get("instruction") ?? "").trim();
+  if (!taskId) return { ok: false, message: "Tâche manquante." };
+  if (!instruction) return { ok: false, message: "Décris le widget voulu." };
+
+  const userId = await getCurrentUserId();
+  const ctx = await getTaskContext(userId, taskId);
+  if (!ctx) return { ok: false, message: "Tâche introuvable." };
+
+  const keys = await getDecryptedProviderKeys(userId);
+  if (Object.keys(keys).length === 0) {
+    return { ok: false, message: "Aucune clé API. Ajoute-en une sur l'accueil." };
+  }
+
+  const startedAt = new Date();
+  try {
+    const res = await generateWidget(instruction, ctx, keys);
+    await addArtifact(taskId, {
+      type: "widget",
+      title: res.widget.title,
+      content: JSON.stringify(res.widget),
+    });
+    await record(
+      userId,
+      `[widget] ${res.widget.title}`,
+      { spec: res.spec, tier: "frontier", promptTokens: res.promptTokens, completionTokens: res.completionTokens, costUsd: res.costUsd },
+      "succeeded",
+      startedAt,
+    );
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : "Échec de génération.",
+    };
+  }
+
+  revalidatePath(`/tasks/${taskId}`);
+  return { ok: true, message: "Widget généré et sauvegardé." };
 }
 
 // --- Mode Autonome : lancement / arrêt d'un run --------------------------
