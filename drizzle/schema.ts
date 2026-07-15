@@ -78,6 +78,14 @@ export const artifactTypeEnum = pgEnum("artifact_type", [
 
 export const normeScopeEnum = pgEnum("norme_scope", ["global", "project"]);
 
+export const runStatusEnum = pgEnum("run_status", [
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+]);
+
 // --- Colonnes communes ---------------------------------------------------
 
 const timestamps = {
@@ -273,6 +281,44 @@ export const budgets = pgTable("budgets", {
   ...timestamps,
 });
 
+/**
+ * Runs du mode Autonome — sert AUSSI de queue durable : les lignes `queued`
+ * sont réclamées par le worker (`FOR UPDATE SKIP LOCKED`), les `running`
+ * peuvent être reprises après un crash. Garde-fous vérifiés à chaque itération :
+ * plafond de coût, nombre max d'itérations, timeout, kill switch.
+ */
+export const autonomousRuns = pgTable("autonomous_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  taskId: uuid("task_id")
+    .notNull()
+    .references(() => tasks.id, { onDelete: "cascade" }),
+  goal: text("goal").notNull(),
+  status: runStatusEnum("status").notNull().default("queued"),
+  /** Garde-fous. */
+  maxIterations: integer("max_iterations").notNull().default(5),
+  maxCostUsd: numeric("max_cost_usd", { precision: 12, scale: 6 })
+    .notNull()
+    .default("0.500000"),
+  timeoutAt: timestamp("timeout_at", { withTimezone: true }),
+  killRequested: boolean("kill_requested").notNull().default(false),
+  /** Progression. */
+  iterations: integer("iterations").notNull().default(0),
+  spentUsd: numeric("spent_usd", { precision: 12, scale: 6 })
+    .notNull()
+    .default("0"),
+  /** Verrou de worker (claim) : horodatage de prise en charge. */
+  lockedAt: timestamp("locked_at", { withTimezone: true }),
+  /** Raison d'arrêt : completed | budget | iterations | timeout | killed | error. */
+  stopReason: text("stop_reason"),
+  error: text("error"),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  ...timestamps,
+});
+
 // --- Relations -----------------------------------------------------------
 
 export const usersRelations = relations(users, ({ many }) => ({
@@ -357,5 +403,16 @@ export const budgetsRelations = relations(budgets, ({ one }) => ({
   project: one(projects, {
     fields: [budgets.projectId],
     references: [projects.id],
+  }),
+}));
+
+export const autonomousRunsRelations = relations(autonomousRuns, ({ one }) => ({
+  user: one(users, {
+    fields: [autonomousRuns.userId],
+    references: [users.id],
+  }),
+  task: one(tasks, {
+    fields: [autonomousRuns.taskId],
+    references: [tasks.id],
   }),
 }));

@@ -2,12 +2,13 @@
 
 Plateforme de gestion de projet pilotée par **orchestration dynamique d'IA** : au lieu de cocher des tâches statiques, un routeur intelligent découpe une idée en phases, puis distribue le travail aux modèles d'IA les plus rentables et compétents selon la complexité et la taille du contexte.
 
-Ce dépôt implémente jusqu'au **Milestone 3 (Modes Manuel + Cowork)** :
+Ce dépôt implémente jusqu'au **Milestone 4 (Mode Autonome)** :
 
 - **M0** — walking skeleton (Next.js 15 / TS strict, schéma Drizzle, CI).
 - **M1** — clés API multi-provider **chiffrées** (AES-256-GCM), routage + exécution réelle, **coût réel** journalisé dans `agent_executions`.
 - **M2** — un **agent architecte** transforme une idée en langage naturel en arborescence `Projet → Phases → Tâches` (sortie structurée Zod), **éditable** depuis `/projects`.
 - **M3** — **chat par tâche** avec bascule de mode : **Manuel** (réponse réactive, tier `fast`) et **Cowork** (l'agent propose des options, s'arrête sur un **point d'arrêt** persisté en base, puis produit un **`Artifact`** après le choix de l'utilisateur, tier `frontier`).
+- **M4** — **mode Autonome (Full-Auto)** : une **queue durable en base** (`autonomous_runs`) + un **worker** (`npm run worker`) exécutent des runs en arrière-plan, avec **garde-fous vérifiés à chaque étape** (max itérations, plafond de coût, timeout, **kill switch**) et reprise après crash.
 
 Voir [`orchestrato_ai_concept.md`](orchestrato_ai_concept.md) pour la vision fonctionnelle et [`orchestrato_ai_development_plan.md`](orchestrato_ai_development_plan.md) pour le plan de développement complet.
 
@@ -32,14 +33,17 @@ app/
     new-project-form.tsx  Formulaire client (idée → génération)
     [id]/page.tsx     Arborescence éditable d'un projet
   tasks/
-    [taskId]/page.tsx   Chat par tâche (fil + artefacts) + bascule de mode
-    [taskId]/actions.ts  Server Actions : envoi, choix Cowork, mode
+    [taskId]/page.tsx   Chat par tâche (fil + artefacts + runs) + bascule de mode
+    [taskId]/actions.ts  Server Actions : envoi, choix Cowork, mode, runs
 components/
   keys-manager.tsx    Formulaire client d'ajout/suppression de clés (masquées)
   router-demo.tsx     Formulaire client de test du routeur
   executions-list.tsx Historique + agrégats de coût réel
   auto-submit-select.tsx  <select> qui soumet au changement (édition inline)
   task-chat.tsx       Composeur client + boutons de choix Cowork
+  autonomous-panel.tsx  Lancement de runs autonomes + kill switch
+scripts/
+  worker.ts           Worker de fond : draine la queue autonomous_runs
 drizzle/
   schema.ts           Schéma complet (User, ApiKey, Project, Phase, Task,
                       AgentExecution, Message, Artifact, Norme, Budget…)
@@ -54,6 +58,9 @@ lib/
   projects.ts         Persistance + édition des projets/phases/tâches
   conversation.ts     Fil par tâche, artefacts, état de la machine Cowork
   agent.ts            Agent conversationnel (Manuel/Cowork) via le routeur
+  runs.ts             Queue durable des runs autonomes (claim SKIP LOCKED)
+  worker.ts           Exécuteur de run + garde-fous (fonction d'étape injectable)
+  autonomous-agent.ts Câblage de production du worker (étape LLM réelle)
   models.ts           Catalogue de modèles + tarification (calcul du coût réel)
   llm-router.ts       Routeur : classification heuristique → sélection → appel
 ```
@@ -101,6 +108,7 @@ Puis il sélectionne le meilleur provider **disponible** (clé fournie) selon un
 | `npm run build` | Build de production |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint (config Next) |
+| `npm run worker` | Worker du mode Autonome (draine la queue en arrière-plan) |
 | `npm run db:generate` | Génère les migrations SQL depuis le schéma |
 | `npm run db:migrate` | Applique les migrations (non-interactif) |
 | `npm run db:studio` | Explorateur de base Drizzle |
@@ -109,6 +117,15 @@ Puis il sélectionne le meilleur provider **disponible** (clé fournie) selon un
 
 `.github/workflows/ci.yml` exécute lint + typecheck + build sur chaque push/PR vers `main`.
 
-## Prochaine étape — Milestone 4
+## Mode Autonome — comment ça tourne
 
-Mode Autonome (Full-Auto) : intégration d'une queue durable (Trigger.dev / Inngest), chaîne de tâches en arrière-plan avec garde-fous stricts (itérations max, plafond de coût vérifié à chaque étape, timeout, kill switch) et notifications de fin de run.
+La queue est **maison** (Postgres + worker), sans service externe :
+
+1. Depuis une tâche (`/tasks/[id]`), lancer un run avec un objectif et des garde-fous (max itérations, plafond de coût, timeout).
+2. Le run est mis en file (`autonomous_runs`, statut `queued`).
+3. Le **worker** (`npm run worker`, processus séparé) réclame le run (`FOR UPDATE SKIP LOCKED`), l'exécute par itérations, vérifie les garde-fous **à chaque étape**, persiste coût et progression, produit un `Artifact`, puis notifie la fin (statut + raison d'arrêt).
+4. Un **kill switch** dans l'UI arrête un run en cours ; un worker qui crashe laisse le run repris automatiquement (verrou périmé).
+
+## Prochaine étape — Milestone 5
+
+Bibliothèque de Normes/Skills : CRUD `Norme` (contenu, catégorie, scope global/projet), association automatique par type de phase + manuelle, injection en préprompt traçable au démarrage de la phase.

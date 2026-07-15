@@ -12,7 +12,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "worker": "tsx --conditions=react-server scripts/worker.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^1.2.12",
@@ -38,6 +39,7 @@
     "eslint-config-next": "15.5.20",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
+    "tsx": "^4.23.1",
     "typescript": "^5.8.3"
   }
 }

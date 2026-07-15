@@ -12,7 +12,7 @@ const MILESTONES: Array<{ id: string; label: string; done: boolean }> = [
   { id: "M1", label: "Routeur d'Intelligence minimal", done: true },
   { id: "M2", label: "Agent Architecte", done: true },
   { id: "M3", label: "Modes Manuel + Cowork", done: true },
-  { id: "M4", label: "Mode Autonome (Full-Auto)", done: false },
+  { id: "M4", label: "Mode Autonome (Full-Auto)", done: true },
   { id: "M5", label: "Bibliothèque de Normes/Skills", done: false },
   { id: "M6", label: "UI adaptative + widgets", done: false },
 ];

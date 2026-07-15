@@ -18,6 +18,7 @@ import {
 } from "@/lib/conversation";
 import { recordExecution } from "@/lib/executions";
 import { getDecryptedProviderKeys } from "@/lib/keys";
+import { enqueueRun, requestKill } from "@/lib/runs";
 import { getCurrentUserId } from "@/lib/users";
 import type { TaskMode } from "@/lib/projects";
 import type { ModelSpec, Tier } from "@/lib/models";
@@ -143,6 +144,72 @@ export async function sendMessageAction(
 
   revalidatePath(`/tasks/${taskId}`);
   return { ok: true, message: "" };
+}
+
+// --- Mode Autonome : lancement / arrêt d'un run --------------------------
+
+export interface RunFormState {
+  ok: boolean;
+  message: string;
+}
+
+/** Met un run autonome en file (le worker le traitera en arrière-plan). */
+export async function startRunAction(
+  _prev: RunFormState,
+  formData: FormData,
+): Promise<RunFormState> {
+  const taskId = String(formData.get("taskId") ?? "");
+  const goal = String(formData.get("goal") ?? "").trim();
+  const maxIterations = Math.min(
+    Math.max(Number(formData.get("maxIterations") ?? 5), 1),
+    20,
+  );
+  const maxCostUsd = Math.min(
+    Math.max(Number(formData.get("maxCostUsd") ?? 0.5), 0.01),
+    50,
+  );
+  const timeoutMin = Math.min(
+    Math.max(Number(formData.get("timeoutMin") ?? 10), 1),
+    120,
+  );
+
+  if (!taskId) return { ok: false, message: "Tâche manquante." };
+  if (!goal) return { ok: false, message: "Décris l'objectif du run." };
+
+  const userId = await getCurrentUserId();
+  const ctx = await getTaskContext(userId, taskId);
+  if (!ctx) return { ok: false, message: "Tâche introuvable." };
+
+  const keys = await getDecryptedProviderKeys(userId);
+  if (Object.keys(keys).length === 0) {
+    return {
+      ok: false,
+      message: "Aucune clé API. Ajoute-en une sur l'accueil avant de lancer.",
+    };
+  }
+
+  await enqueueRun(userId, taskId, {
+    goal,
+    maxIterations,
+    maxCostUsd,
+    timeoutMs: timeoutMin * 60_000,
+  });
+  revalidatePath(`/tasks/${taskId}`);
+  return {
+    ok: true,
+    message:
+      "Run mis en file. Lance le worker (npm run worker) pour l'exécuter en arrière-plan.",
+  };
+}
+
+/** Kill switch : demande l'arrêt d'un run en cours. */
+export async function killRunAction(formData: FormData): Promise<void> {
+  const runId = String(formData.get("runId") ?? "");
+  const taskId = String(formData.get("taskId") ?? "");
+  if (!runId) return;
+  const userId = await getCurrentUserId();
+  await requestKill(userId, runId);
+  revalidatePath(`/tasks/${taskId}`);
 }
 
 /**

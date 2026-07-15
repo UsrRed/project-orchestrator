@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { AutonomousPanel } from "@/components/autonomous-panel";
 import { AutoSubmitSelect } from "@/components/auto-submit-select";
 import { TaskChat } from "@/components/task-chat";
 import {
@@ -10,6 +11,7 @@ import {
   listMessages,
   type CoworkOptionsData,
 } from "@/lib/conversation";
+import { listRunsForTask } from "@/lib/runs";
 import { getCurrentUserId } from "@/lib/users";
 import { setModeAction } from "./actions";
 
@@ -31,10 +33,11 @@ export default async function TaskChatPage({
   const ctx = await getTaskContext(userId, taskId);
   if (!ctx) notFound();
 
-  const [messages, artifacts, cowork] = await Promise.all([
+  const [messages, artifacts, cowork, runs] = await Promise.all([
     listMessages(userId, taskId),
     listArtifacts(userId, taskId),
     getCoworkStatus(userId, taskId),
+    listRunsForTask(userId, taskId),
   ]);
 
   return (
@@ -96,6 +99,19 @@ export default async function TaskChatPage({
           awaitingChoice={cowork.awaitingChoice}
           pendingOptions={cowork.pendingOptions}
         />
+      </section>
+
+      {/* Mode Autonome : runs en arrière-plan */}
+      <section className="rounded-xl border border-sky-900/50 bg-sky-950/10 p-5">
+        <h2 className="mb-1 text-lg font-semibold text-sky-200">
+          Mode Autonome (Full-Auto)
+        </h2>
+        <p className="mb-4 text-sm text-neutral-500">
+          Lance un run en arrière-plan avec garde-fous (itérations, plafond de
+          coût vérifié à chaque étape, timeout, kill switch). Exécuté par le
+          worker&nbsp;: <code>npm run worker</code>.
+        </p>
+        <AutonomousPanel taskId={taskId} runs={runs} />
       </section>
 
       {/* Artefacts produits */}

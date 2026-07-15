@@ -90,7 +90,8 @@ export type MessageKind =
   | "text"
   | "cowork_options"
   | "cowork_choice"
-  | "artifact";
+  | "artifact"
+  | "auto_step";
 
 export interface CoworkOption {
   title: string;
