@@ -1,0 +1,418 @@
+/**
+ * Schéma de données Orchestrato.AI (Milestone 0 → 1).
+ *
+ * Reflète le schéma de haut niveau du plan de développement :
+ *   User 1─N ApiKey / Project / Norme
+ *   Project 1─N Phase, 1─1 Budget
+ *   Phase 1─N Task, N─N Norme (via PhaseNormeAssociation)
+ *   Task 1─N AgentExecution / Message / Artifact
+ *
+ * `agent_execution` est la table de vérité pour le coût réel (suivi de
+ * l'optimisation financière du routage).
+ */
+import { relations } from "drizzle-orm";
+import {
+  boolean,
+  integer,
+  jsonb,
+  numeric,
+  pgEnum,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
+
+// --- Enums ---------------------------------------------------------------
+
+export const providerEnum = pgEnum("provider", [
+  "anthropic",
+  "openai",
+  "google",
+  "openrouter",
+  "groq",
+  "ollama",
+]);
+
+export const projectTypeEnum = pgEnum("project_type", ["tech", "marketing"]);
+
+export const phaseStatusEnum = pgEnum("phase_status", [
+  "pending",
+  "in_progress",
+  "done",
+]);
+
+export const taskStatusEnum = pgEnum("task_status", [
+  "todo",
+  "in_progress",
+  "blocked",
+  "done",
+]);
+
+export const taskModeEnum = pgEnum("task_mode", [
+  "autonomous",
+  "cowork",
+  "manual",
+]);
+
+export const executionStatusEnum = pgEnum("execution_status", [
+  "pending",
+  "running",
+  "succeeded",
+  "failed",
+]);
+
+export const messageRoleEnum = pgEnum("message_role", [
+  "system",
+  "user",
+  "assistant",
+  "tool",
+]);
+
+export const artifactTypeEnum = pgEnum("artifact_type", [
+  "document",
+  "widget",
+  "diagram",
+]);
+
+export const normeScopeEnum = pgEnum("norme_scope", ["global", "project"]);
+
+export const runStatusEnum = pgEnum("run_status", [
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+]);
+
+// --- Colonnes communes ---------------------------------------------------
+
+const timestamps = {
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
+};
+
+// --- Tables --------------------------------------------------------------
+
+export const users = pgTable("users", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  email: text("email").notNull().unique(),
+  name: text("name"),
+  ...timestamps,
+});
+
+/** Clés API fédérées de l'utilisateur — la clé est stockée CHIFFRÉE (AES-256-GCM). */
+export const apiKeys = pgTable(
+  "api_keys",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    provider: providerEnum("provider").notNull(),
+    label: text("label"),
+    /** Payload chiffré renvoyé par lib/crypto.ts (format iv:authTag:ciphertext, base64). */
+    encryptedKey: text("encrypted_key").notNull(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => ({
+    byUserProvider: uniqueIndex("api_keys_user_provider_label_uq").on(
+      t.userId,
+      t.provider,
+      t.label,
+    ),
+  }),
+);
+
+export const projects = pgTable("projects", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  idea: text("idea"),
+  type: projectTypeEnum("type").notNull().default("tech"),
+  budgetLimitUsd: numeric("budget_limit_usd", { precision: 12, scale: 4 }),
+  ...timestamps,
+});
+
+export const phases = pgTable("phases", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  type: text("type"),
+  order: integer("order").notNull().default(0),
+  status: phaseStatusEnum("status").notNull().default("pending"),
+  ...timestamps,
+});
+
+export const tasks = pgTable("tasks", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  phaseId: uuid("phase_id")
+    .notNull()
+    .references(() => phases.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  description: text("description"),
+  status: taskStatusEnum("status").notNull().default("todo"),
+  mode: taskModeEnum("mode").notNull().default("manual"),
+  priority: integer("priority").notNull().default(0),
+  ...timestamps,
+});
+
+/** Table de vérité du coût réel de chaque appel LLM. */
+export const agentExecutions = pgTable("agent_executions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  /**
+   * Tâche d'origine. Nullable : en M1, le routeur est exécuté de façon
+   * autonome (playground), avant l'existence des `Task` liées à un projet (M2).
+   */
+  taskId: uuid("task_id").references(() => tasks.id, { onDelete: "cascade" }),
+  /** Utilisateur propriétaire de l'exécution (suivi du coût par compte). */
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  /** Libellé lisible de la requête routée (prompt tronqué, type de tâche). */
+  taskLabel: text("task_label"),
+  provider: providerEnum("provider").notNull(),
+  model: text("model").notNull(),
+  tier: text("tier"),
+  mode: taskModeEnum("mode").notNull().default("manual"),
+  status: executionStatusEnum("status").notNull().default("pending"),
+  promptTokens: integer("prompt_tokens").notNull().default(0),
+  completionTokens: integer("completion_tokens").notNull().default(0),
+  costUsd: numeric("cost_usd", { precision: 12, scale: 6 })
+    .notNull()
+    .default("0"),
+  error: text("error"),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  ...timestamps,
+});
+
+/** Fil de discussion cowork/manuel d'une tâche. */
+export const messages = pgTable("messages", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  taskId: uuid("task_id")
+    .notNull()
+    .references(() => tasks.id, { onDelete: "cascade" }),
+  role: messageRoleEnum("role").notNull(),
+  content: text("content").notNull(),
+  /**
+   * Nature du message pour le rendu et la machine à états Cowork :
+   * 'text' (défaut), 'cowork_options' (l'agent propose des options et attend),
+   * 'cowork_choice' (l'utilisateur a choisi), 'artifact' (un artefact a été produit).
+   */
+  kind: text("kind").notNull().default("text"),
+  /** Charge structurée éventuelle (ex: liste d'options Cowork, réf. d'artefact). */
+  data: jsonb("data"),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const artifacts = pgTable("artifacts", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  taskId: uuid("task_id")
+    .notNull()
+    .references(() => tasks.id, { onDelete: "cascade" }),
+  type: artifactTypeEnum("type").notNull(),
+  title: text("title"),
+  /** Contenu inline (document/widget JSON) ou URL externe. */
+  content: text("content"),
+  url: text("url"),
+  ...timestamps,
+});
+
+/** Normes / Skills réutilisables (chartes, guides méthodo) injectées en préprompt. */
+export const normes = pgTable("normes", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  category: text("category"),
+  promptContent: text("prompt_content").notNull(),
+  scope: normeScopeEnum("scope").notNull().default("global"),
+  /** Renseigné seulement si scope = 'project'. */
+  projectId: uuid("project_id").references(() => projects.id, {
+    onDelete: "cascade",
+  }),
+  ...timestamps,
+});
+
+/** Association N─N Phase ↔ Norme, avec application automatique éventuelle. */
+export const phaseNormeAssociations = pgTable(
+  "phase_norme_associations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    phaseId: uuid("phase_id")
+      .notNull()
+      .references(() => phases.id, { onDelete: "cascade" }),
+    normeId: uuid("norme_id")
+      .notNull()
+      .references(() => normes.id, { onDelete: "cascade" }),
+    autoApplied: boolean("auto_applied").notNull().default(false),
+  },
+  (t) => ({
+    uq: uniqueIndex("phase_norme_uq").on(t.phaseId, t.normeId),
+  }),
+);
+
+export const budgets = pgTable("budgets", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  projectId: uuid("project_id")
+    .notNull()
+    .unique()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  limitUsd: numeric("limit_usd", { precision: 12, scale: 4 }).notNull(),
+  spentUsd: numeric("spent_usd", { precision: 12, scale: 6 })
+    .notNull()
+    .default("0"),
+  period: text("period").notNull().default("total"),
+  ...timestamps,
+});
+
+/**
+ * Runs du mode Autonome — sert AUSSI de queue durable : les lignes `queued`
+ * sont réclamées par le worker (`FOR UPDATE SKIP LOCKED`), les `running`
+ * peuvent être reprises après un crash. Garde-fous vérifiés à chaque itération :
+ * plafond de coût, nombre max d'itérations, timeout, kill switch.
+ */
+export const autonomousRuns = pgTable("autonomous_runs", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  taskId: uuid("task_id")
+    .notNull()
+    .references(() => tasks.id, { onDelete: "cascade" }),
+  goal: text("goal").notNull(),
+  status: runStatusEnum("status").notNull().default("queued"),
+  /** Garde-fous. */
+  maxIterations: integer("max_iterations").notNull().default(5),
+  maxCostUsd: numeric("max_cost_usd", { precision: 12, scale: 6 })
+    .notNull()
+    .default("0.500000"),
+  timeoutAt: timestamp("timeout_at", { withTimezone: true }),
+  killRequested: boolean("kill_requested").notNull().default(false),
+  /** Progression. */
+  iterations: integer("iterations").notNull().default(0),
+  spentUsd: numeric("spent_usd", { precision: 12, scale: 6 })
+    .notNull()
+    .default("0"),
+  /** Verrou de worker (claim) : horodatage de prise en charge. */
+  lockedAt: timestamp("locked_at", { withTimezone: true }),
+  /** Raison d'arrêt : completed | budget | iterations | timeout | killed | error. */
+  stopReason: text("stop_reason"),
+  error: text("error"),
+  startedAt: timestamp("started_at", { withTimezone: true }),
+  finishedAt: timestamp("finished_at", { withTimezone: true }),
+  ...timestamps,
+});
+
+// --- Relations -----------------------------------------------------------
+
+export const usersRelations = relations(users, ({ many }) => ({
+  apiKeys: many(apiKeys),
+  projects: many(projects),
+  normes: many(normes),
+  executions: many(agentExecutions),
+}));
+
+export const apiKeysRelations = relations(apiKeys, ({ one }) => ({
+  user: one(users, { fields: [apiKeys.userId], references: [users.id] }),
+}));
+
+export const projectsRelations = relations(projects, ({ one, many }) => ({
+  user: one(users, { fields: [projects.userId], references: [users.id] }),
+  phases: many(phases),
+  budget: one(budgets),
+}));
+
+export const phasesRelations = relations(phases, ({ one, many }) => ({
+  project: one(projects, {
+    fields: [phases.projectId],
+    references: [projects.id],
+  }),
+  tasks: many(tasks),
+  normeAssociations: many(phaseNormeAssociations),
+}));
+
+export const tasksRelations = relations(tasks, ({ one, many }) => ({
+  phase: one(phases, { fields: [tasks.phaseId], references: [phases.id] }),
+  executions: many(agentExecutions),
+  messages: many(messages),
+  artifacts: many(artifacts),
+}));
+
+export const agentExecutionsRelations = relations(
+  agentExecutions,
+  ({ one }) => ({
+    task: one(tasks, {
+      fields: [agentExecutions.taskId],
+      references: [tasks.id],
+    }),
+    user: one(users, {
+      fields: [agentExecutions.userId],
+      references: [users.id],
+    }),
+  }),
+);
+
+export const messagesRelations = relations(messages, ({ one }) => ({
+  task: one(tasks, { fields: [messages.taskId], references: [tasks.id] }),
+}));
+
+export const artifactsRelations = relations(artifacts, ({ one }) => ({
+  task: one(tasks, { fields: [artifacts.taskId], references: [tasks.id] }),
+}));
+
+export const normesRelations = relations(normes, ({ one, many }) => ({
+  user: one(users, { fields: [normes.userId], references: [users.id] }),
+  project: one(projects, {
+    fields: [normes.projectId],
+    references: [projects.id],
+  }),
+  phaseAssociations: many(phaseNormeAssociations),
+}));
+
+export const phaseNormeAssociationsRelations = relations(
+  phaseNormeAssociations,
+  ({ one }) => ({
+    phase: one(phases, {
+      fields: [phaseNormeAssociations.phaseId],
+      references: [phases.id],
+    }),
+    norme: one(normes, {
+      fields: [phaseNormeAssociations.normeId],
+      references: [normes.id],
+    }),
+  }),
+);
+
+export const budgetsRelations = relations(budgets, ({ one }) => ({
+  project: one(projects, {
+    fields: [budgets.projectId],
+    references: [projects.id],
+  }),
+}));
+
+export const autonomousRunsRelations = relations(autonomousRuns, ({ one }) => ({
+  user: one(users, {
+    fields: [autonomousRuns.userId],
+    references: [users.id],
+  }),
+  task: one(tasks, {
+    fields: [autonomousRuns.taskId],
+    references: [tasks.id],
+  }),
+}));
