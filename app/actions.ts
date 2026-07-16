@@ -268,4 +268,7 @@ export async function deleteConnectionAction(
   const userId = await getCurrentUserId();
   await deleteConnection(userId, id);
   revalidatePath("/");
+  // « Oublier » est aussi offert depuis /models : la joignabilité qui y est
+  // affichée dépend directement des connexions.
+  revalidatePath("/models");
 }
