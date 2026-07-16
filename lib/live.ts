@@ -10,7 +10,9 @@ import "server-only";
 import {
   executionStats,
   executionUsageSince,
+  usageByModel,
   type ExecutionStats,
+  type ModelUsageRow,
 } from "@/lib/executions";
 import { listActiveRuns, type RunStatus } from "@/lib/runs";
 
@@ -42,16 +44,21 @@ export interface LiveSnapshot {
   executions: { total: number };
   /** Consommation sur la dernière heure. */
   recent: { tokens: number; costUsd: number; count: number; windowMs: number };
+  /** Ventilation par (provider, modèle) : global, et sur la fenêtre live. */
+  byModel: { global: ModelUsageRow[]; recent: ModelUsageRow[] };
 }
 
 export async function liveSnapshot(
   userId: string,
   now: Date = new Date(),
 ): Promise<LiveSnapshot> {
-  const [runs, stats, recent] = await Promise.all([
+  const since = new Date(now.getTime() - RECENT_WINDOW_MS);
+  const [runs, stats, recent, byModelGlobal, byModelRecent] = await Promise.all([
     listActiveRuns(userId),
     executionStats(userId),
-    executionUsageSince(userId, new Date(now.getTime() - RECENT_WINDOW_MS)),
+    executionUsageSince(userId, since),
+    usageByModel(userId),
+    usageByModel(userId, since),
   ]);
 
   return {
@@ -74,6 +81,7 @@ export async function liveSnapshot(
     costUsd: stats.totalCostUsd,
     executions: { total: stats.count },
     recent: { ...recent, windowMs: RECENT_WINDOW_MS },
+    byModel: { global: byModelGlobal, recent: byModelRecent },
   };
 }
 

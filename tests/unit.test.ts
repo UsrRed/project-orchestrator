@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   CLI_AGENTS,
   OPENCODE_CLI_MODEL,
+  UNKNOWN_MODEL,
   cliAgentInfo,
   isCliAgentId,
 } from "@/lib/cli-agents";
@@ -409,6 +410,65 @@ const GEMINI_JSON = JSON.stringify({
   stats: { models: {} },
 });
 
+/**
+ * Sortie réelle de `claude -p --output-format json` (sonde du 2026-07-16),
+ * réduite aux champs lus. `modelUsage` ventile par modèle : une invocation
+ * unique a traversé DEUX modèles, et `usage.input_tokens` vaut 2 alors que
+ * ~26 000 tokens ont réellement été traités (le reste est du cache).
+ */
+const CLAUDE_JSON_MULTI = JSON.stringify({
+  type: "result",
+  result: "OK",
+  session_id: "743b663e-c01c-4f02-a104-729b9b8924af",
+  total_cost_usd: 0.172111,
+  usage: {
+    input_tokens: 2,
+    cache_creation_input_tokens: 7597,
+    cache_read_input_tokens: 18573,
+    output_tokens: 20,
+  },
+  modelUsage: {
+    "claude-haiku-4-5-20251001": {
+      inputTokens: 523,
+      outputTokens: 11,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+      costUSD: 0.000578,
+    },
+    "claude-fable-5": {
+      inputTokens: 2,
+      outputTokens: 20,
+      cacheReadInputTokens: 18573,
+      cacheCreationInputTokens: 7597,
+      costUSD: 0.171533,
+    },
+  },
+});
+
+/** Sortie réelle de `opencode run --format json` (même sonde). */
+const OPENCODE_NDJSON_TOKENS = [
+  JSON.stringify({
+    type: "text",
+    sessionID: "ses_x",
+    part: { type: "text", text: "OK" },
+  }),
+  JSON.stringify({
+    type: "step_finish",
+    sessionID: "ses_x",
+    part: {
+      type: "step-finish",
+      tokens: {
+        total: 11432,
+        input: 10394,
+        output: 4,
+        reasoning: 10,
+        cache: { write: 0, read: 1024 },
+      },
+      cost: 0,
+    },
+  }),
+].join("\n");
+
 describe("registre des agents CLI", () => {
   it("expose claude, gemini et opencode", () => {
     expect(CLI_AGENTS.map((c) => c.id)).toEqual([
@@ -492,6 +552,79 @@ describe("registre des agents CLI", () => {
     expect(out.text).toBe("OK");
     expect(out.costUsd).toBe(0);
     expect(cliAgentInfo("gemini")!.reportsCost).toBe(false);
+  });
+
+  it("claude : ventile les tokens par modèle, cache compris", () => {
+    const out = cliAgentInfo("claude")!.parseOutcome(CLAUDE_JSON_MULTI);
+
+    // Une invocation, deux modèles : les agréger sous « claude » perdrait
+    // justement l'information cherchée.
+    const byModel = Object.fromEntries(out.usage.map((u) => [u.model, u]));
+    expect(Object.keys(byModel).sort()).toEqual([
+      "claude-fable-5",
+      "claude-haiku-4-5-20251001",
+    ]);
+
+    // 2 (non caché) + 18 573 (lu en cache) + 7 597 (écrit en cache) = 26 172.
+    // S'en tenir à `input_tokens` afficherait 2 — faux d'un facteur 13 000.
+    expect(byModel["claude-fable-5"]!.inputTokens).toBe(26172);
+    expect(byModel["claude-fable-5"]!.outputTokens).toBe(20);
+    expect(byModel["claude-fable-5"]!.costUsd).toBeCloseTo(0.171533, 6);
+    expect(byModel["claude-haiku-4-5-20251001"]!.inputTokens).toBe(523);
+
+    // La ventilation doit se recoller au total facturé, sinon le coût par
+    // modèle et le coût du run raconteraient deux histoires différentes.
+    const summed = out.usage.reduce((s, u) => s + u.costUsd, 0);
+    expect(summed).toBeCloseTo(out.costUsd, 6);
+  });
+
+  it("claude : sans modelUsage, replie sur l'agrégat sans inventer de modèle", () => {
+    const out = cliAgentInfo("claude")!.parseOutcome(CLAUDE_JSON);
+    expect(out.usage).toHaveLength(1);
+    expect(out.usage[0]!.model).toBe(UNKNOWN_MODEL);
+    expect(out.usage[0]!.inputTokens).toBe(2);
+    expect(out.usage[0]!.outputTokens).toBe(21);
+  });
+
+  it("opencode : somme les tokens et les attribue au modèle imposé", () => {
+    const out = cliAgentInfo("opencode")!.parseOutcome(OPENCODE_NDJSON_TOKENS);
+    expect(out.usage).toHaveLength(1);
+    // Le flux ne nomme pas le modèle : c'est celui passé via `-m`.
+    expect(out.usage[0]!.model).toBe(OPENCODE_CLI_MODEL);
+    // 10 394 + 1 024 (cache lu) + 0 (cache écrit).
+    expect(out.usage[0]!.inputTokens).toBe(11418);
+    // 4 + 10 (raisonnement, facturé comme de la sortie).
+    expect(out.usage[0]!.outputTokens).toBe(14);
+  });
+
+  it("gemini : ventile par modèle d'après stats.models (sans coût)", () => {
+    const out = cliAgentInfo("gemini")!.parseOutcome(
+      JSON.stringify({
+        response: "OK",
+        stats: {
+          models: {
+            "gemini-2.5-pro": {
+              tokens: { prompt: 1200, cached: 300, candidates: 45, thoughts: 5 },
+            },
+          },
+        },
+      }),
+    );
+    expect(out.usage).toEqual([
+      {
+        model: "gemini-2.5-pro",
+        inputTokens: 1500,
+        outputTokens: 50,
+        costUsd: 0,
+      },
+    ]);
+  });
+
+  it("aucune consommation exploitable : liste vide, pas de modèle inventé", () => {
+    expect(cliAgentInfo("gemini")!.parseOutcome(GEMINI_JSON).usage).toEqual([]);
+    for (const cli of CLI_AGENTS) {
+      expect(cli.parseOutcome("texte libre, pas du JSON").usage).toEqual([]);
+    }
   });
 
   it("parse : dégrade sans jeter sur une sortie illisible ou tronquée", () => {

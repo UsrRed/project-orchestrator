@@ -199,6 +199,63 @@ export async function executionUsageSince(
   };
 }
 
+export interface ModelUsageRow {
+  provider: string;
+  model: string;
+  promptTokens: number;
+  completionTokens: number;
+  tokens: number;
+  costUsd: number;
+  count: number;
+}
+
+/**
+ * Consommation ventilée par (provider, modèle) — la lecture « qui consomme
+ * quoi ». `provider` distingue les appels API (`anthropic`, `openai`…) des
+ * agents CLI (`claude_cli`…) ; deux façons très différentes de payer.
+ *
+ * `since` borne la fenêtre (live) ; omis → tout l'historique (global).
+ */
+export async function usageByModel(
+  userId: string,
+  since?: Date,
+): Promise<ModelUsageRow[]> {
+  const rows = await db
+    .select({
+      provider: agentExecutions.provider,
+      model: agentExecutions.model,
+      promptTokens: sql<number>`coalesce(sum(${agentExecutions.promptTokens}), 0)::int`,
+      completionTokens: sql<number>`coalesce(sum(${agentExecutions.completionTokens}), 0)::int`,
+      costUsd: sql<string>`coalesce(sum(${agentExecutions.costUsd}), 0)`,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(agentExecutions)
+    .where(
+      since
+        ? and(
+            eq(agentExecutions.userId, userId),
+            gte(agentExecutions.createdAt, since),
+          )
+        : eq(agentExecutions.userId, userId),
+    )
+    .groupBy(agentExecutions.provider, agentExecutions.model)
+    .orderBy(
+      desc(
+        sql`sum(${agentExecutions.promptTokens} + ${agentExecutions.completionTokens})`,
+      ),
+    );
+
+  return rows.map((r) => ({
+    provider: r.provider,
+    model: r.model,
+    promptTokens: r.promptTokens,
+    completionTokens: r.completionTokens,
+    tokens: r.promptTokens + r.completionTokens,
+    costUsd: Number(r.costUsd),
+    count: r.count,
+  }));
+}
+
 /** Dernières exécutions en échec (observabilité). */
 export async function listFailedExecutions(
   userId: string,

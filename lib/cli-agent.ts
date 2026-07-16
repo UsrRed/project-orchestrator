@@ -237,23 +237,43 @@ export function makeCliAgentDeps(userId: string, cliId: CliAgentId): WorkerDeps 
       };
     }
 
-    await recordExecution({
+    // Une invocation traverse souvent plusieurs modèles : on journalise une
+    // ligne PAR modèle, sinon la consommation par modèle serait perdue à
+    // l'écriture et irrécupérable ensuite. Le total par run reste la somme.
+    const finishedAt = new Date();
+    const base = {
       userId,
       taskLabel: `[cli:${cli.id}] ${taskCtx.taskTitle}`,
       projectId: taskCtx.projectId,
       taskId: ctx.taskId,
       provider: cli.execProvider,
-      model: cli.id,
-      tier: "cli",
-      status: "succeeded",
-      // Les CLI ne remontent pas les tokens dans un format commun : seul le
-      // coût fait foi ici (0 pour un CLI qui ne le mesure pas — cf. reportsCost).
-      promptTokens: 0,
-      completionTokens: 0,
-      costUsd: outcome.costUsd,
+      tier: "cli" as const,
+      status: "succeeded" as const,
       startedAt,
-      finishedAt: new Date(),
-    });
+      finishedAt,
+    };
+
+    if (outcome.usage.length > 0) {
+      for (const u of outcome.usage) {
+        await recordExecution({
+          ...base,
+          model: u.model,
+          promptTokens: u.inputTokens,
+          completionTokens: u.outputTokens,
+          costUsd: u.costUsd,
+        });
+      }
+    } else {
+      // Le CLI n'a rien exposé d'exploitable : on garde la trace de l'appel et
+      // son coût, sans inventer ni modèle ni tokens.
+      await recordExecution({
+        ...base,
+        model: cli.id,
+        promptTokens: 0,
+        completionTokens: 0,
+        costUsd: outcome.costUsd,
+      });
+    }
 
     const changes = await workspaceChanges(ws.path);
     const note = outcome.text.slice(0, NOTE_MAX_CHARS);

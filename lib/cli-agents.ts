@@ -36,12 +36,39 @@ export const OPENCODE_CLI_MODEL =
  */
 export type CliExecProvider = "claude_cli" | "gemini_cli" | "opencode_cli";
 
+/**
+ * Consommation d'UN modèle pendant une invocation.
+ *
+ * Un agent CLI n'est pas mono-modèle : une seule invocation de `claude` passe
+ * couramment par plusieurs modèles (un petit pour les tâches annexes, un gros
+ * pour le raisonnement). Agréger le tout sous « claude » masquerait justement
+ * ce qu'on cherche à voir.
+ */
+export interface CliModelUsage {
+  /** Identifiant du modèle tel que le CLI le nomme (`claude-fable-5`…). */
+  model: string;
+  /**
+   * Tokens d'entrée, **cache inclus** (lecture + écriture). Le champ « input »
+   * brut de `claude` ne compte que le non-caché : s'y fier afficherait 2 tokens
+   * là où le modèle en a réellement traité ~26 000.
+   */
+  inputTokens: number;
+  outputTokens: number;
+  /** Coût de ce modèle. 0 si le CLI ne le ventile pas par modèle. */
+  costUsd: number;
+}
+
 /** Ce que l'on retient d'une invocation, quel que soit le format de sortie. */
 export interface CliOutcome {
   /** Texte final de l'agent (sa réponse), jamais vide en pratique. */
   text: string;
   /** Coût réel remonté par le CLI, en USD. 0 si le CLI ne le remonte pas. */
   costUsd: number;
+  /**
+   * Consommation ventilée par modèle. Vide si le CLI n'expose rien
+   * d'exploitable — on préfère une liste vide à un modèle inventé.
+   */
+  usage: CliModelUsage[];
   /** Identifiant de session à repasser pour reprendre (itération suivante). */
   sessionId?: string;
 }
@@ -139,8 +166,85 @@ function asNumber(v: unknown): number {
  * tâche est pire que de le dire.
  */
 function rawFallback(stdout: string): CliOutcome {
-  return { text: stdout.trim(), costUsd: 0 };
+  return { text: stdout.trim(), costUsd: 0, usage: [] };
 }
+
+/** Objet JSON imbriqué, ou `{}` — évite un `as` à chaque accès. */
+function asRecord(v: unknown): Record<string, unknown> {
+  return v && typeof v === "object" && !Array.isArray(v)
+    ? (v as Record<string, unknown>)
+    : {};
+}
+
+/**
+ * `claude` : `modelUsage` ventile déjà tokens et coût par modèle — c'est la
+ * source la plus fine, on la prend telle quelle.
+ *
+ * Repli sur `usage` (agrégé, tous modèles confondus) quand `modelUsage` manque
+ * : le modèle est alors inconnu, et le dire vaut mieux que d'attribuer les
+ * tokens au premier modèle venu.
+ */
+function parseClaudeUsage(j: Record<string, unknown>): CliModelUsage[] {
+  const byModel = asRecord(j.modelUsage);
+  const out: CliModelUsage[] = [];
+
+  for (const [model, raw] of Object.entries(byModel)) {
+    const u = asRecord(raw);
+    out.push({
+      model,
+      inputTokens:
+        asNumber(u.inputTokens) +
+        asNumber(u.cacheReadInputTokens) +
+        asNumber(u.cacheCreationInputTokens),
+      outputTokens: asNumber(u.outputTokens),
+      costUsd: asNumber(u.costUSD),
+    });
+  }
+  if (out.length > 0) return out;
+
+  const u = asRecord(j.usage);
+  const input =
+    asNumber(u.input_tokens) +
+    asNumber(u.cache_read_input_tokens) +
+    asNumber(u.cache_creation_input_tokens);
+  const output = asNumber(u.output_tokens);
+  if (input === 0 && output === 0) return [];
+
+  return [
+    {
+      model: UNKNOWN_MODEL,
+      inputTokens: input,
+      outputTokens: output,
+      costUsd: asNumber(j.total_cost_usd),
+    },
+  ];
+}
+
+/**
+ * `gemini` : `stats.models` est une carte modèle → { tokens: { prompt,
+ * candidates, cached, thoughts, tool } }. Aucun coût n'y figure (cf.
+ * `reportsCost: false`).
+ *
+ * NON VÉRIFIÉ sur un vrai run : l'authentification `gemini` est morte sur
+ * cette machine (cf. `knownIssue`). Écrit d'après la forme documentée et
+ * couvert par fixture ; à confirmer quand l'auth sera rétablie.
+ */
+function parseGeminiUsage(j: Record<string, unknown>): CliModelUsage[] {
+  const models = asRecord(asRecord(j.stats).models);
+  const out: CliModelUsage[] = [];
+
+  for (const [model, raw] of Object.entries(models)) {
+    const t = asRecord(asRecord(raw).tokens);
+    const input = asNumber(t.prompt) + asNumber(t.cached);
+    const output = asNumber(t.candidates) + asNumber(t.thoughts);
+    if (input === 0 && output === 0) continue;
+    out.push({ model, inputTokens: input, outputTokens: output, costUsd: 0 });
+  }
+  return out;
+}
+
+/** Modèle non identifiable dans la sortie du CLI. Affiché tel quel. */
+export const UNKNOWN_MODEL = "(modèle inconnu)";
 
 /** Sortie comprise, mais l'agent n'a pas conclu par un message. */
 const NO_FINAL_TEXT =
@@ -182,6 +286,7 @@ export const CLI_AGENTS: readonly CliAgentInfo[] = [
       return {
         text: asString(j.result) || NO_FINAL_TEXT,
         costUsd: asNumber(j.total_cost_usd),
+        usage: parseClaudeUsage(j),
         sessionId: asString(j.session_id) || undefined,
       };
     },
@@ -219,6 +324,7 @@ export const CLI_AGENTS: readonly CliAgentInfo[] = [
       return {
         text: asString(j.response) || NO_FINAL_TEXT,
         costUsd: 0,
+        usage: parseGeminiUsage(j),
         sessionId: asString(j.sessionId) || undefined,
       };
     },
@@ -252,18 +358,36 @@ export const CLI_AGENTS: readonly CliAgentInfo[] = [
 
       let text = "";
       let costUsd = 0;
+      let inputTokens = 0;
+      let outputTokens = 0;
       let sessionId: string | undefined;
 
       for (const e of events) {
         const part = (e.part ?? {}) as Record<string, unknown>;
         sessionId ||= asString(e.sessionID) || undefined;
         if (e.type === "text") text += asString(part.text);
-        if (e.type === "step_finish") costUsd += asNumber(part.cost);
+        if (e.type === "step_finish") {
+          costUsd += asNumber(part.cost);
+          // `tokens: { input, output, reasoning, cache: { read, write } }`.
+          const t = asRecord(part.tokens);
+          const cache = asRecord(t.cache);
+          inputTokens +=
+            asNumber(t.input) + asNumber(cache.read) + asNumber(cache.write);
+          // Le raisonnement est facturé comme de la sortie.
+          outputTokens += asNumber(t.output) + asNumber(t.reasoning);
+        }
       }
+
+      // Le flux ne nomme pas le modèle : c'est celui qu'on a imposé via `-m`,
+      // seul modèle possible de l'invocation.
+      const usage: CliModelUsage[] =
+        inputTokens > 0 || outputTokens > 0
+          ? [{ model: OPENCODE_CLI_MODEL, inputTokens, outputTokens, costUsd }]
+          : [];
 
       // Le flux est compris : même sans message final, on ne recrache pas les
       // événements bruts dans le fil de la tâche.
-      return { text: text.trim() || NO_FINAL_TEXT, costUsd, sessionId };
+      return { text: text.trim() || NO_FINAL_TEXT, costUsd, usage, sessionId };
     },
   },
 ] as const;

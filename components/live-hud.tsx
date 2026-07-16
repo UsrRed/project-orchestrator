@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import type { ModelUsageRow } from "@/lib/executions";
 import type { LiveAgent, LiveSnapshot } from "@/lib/live";
 
 /**
@@ -16,6 +17,22 @@ const STATUS_STYLE: Record<string, string> = {
   queued: "text-amber-300",
   running: "text-sky-300",
 };
+
+/**
+ * Comment le modèle a été payé. Un run `claude` passe par un abonnement CLI,
+ * un appel `anthropic` par une clé API : même modèle, facturation opposée —
+ * les confondre rendrait la ventilation trompeuse.
+ */
+function providerKind(provider: string): { label: string; style: string } {
+  return provider.endsWith("_cli")
+    ? { label: "CLI", style: "bg-fuchsia-950 text-fuchsia-300" }
+    : { label: "API", style: "bg-sky-950 text-sky-300" };
+}
+
+/** `claude_cli` → `claude` : le badge CLI/API porte déjà la distinction. */
+function providerName(provider: string): string {
+  return provider.replace(/_cli$/, "");
+}
 
 /**
  * HUD flottant, présent sur toutes les pages : nombre d'agents en cours et
@@ -154,27 +171,7 @@ function LivePanel({
         </p>
       )}
 
-      <div className="grid grid-cols-2 gap-2">
-        <Stat label="Tokens (total)" value={formatTokens(snap.tokens.total)} />
-        <Stat label="Coût (total)" value={`$${snap.costUsd.toFixed(4)}`} />
-        <Stat
-          label="Tokens (1 h)"
-          value={formatTokens(snap.recent.tokens)}
-          accent="text-sky-300"
-        />
-        <Stat
-          label="Coût (1 h)"
-          value={`$${snap.recent.costUsd.toFixed(4)}`}
-          accent="text-sky-300"
-        />
-      </div>
-
-      <p className="mt-3 text-[11px] text-neutral-500">
-        {snap.tokens.prompt.toLocaleString("fr-FR")} entrée ·{" "}
-        {snap.tokens.completion.toLocaleString("fr-FR")} sortie ·{" "}
-        {snap.executions.total} exécution
-        {snap.executions.total > 1 ? "s" : ""}
-      </p>
+      <ModelBreakdown snap={snap} />
 
       <Link
         href="/health"
@@ -183,6 +180,103 @@ function LivePanel({
         Voir la santé complète →
       </Link>
     </div>
+  );
+}
+
+/**
+ * Tokens par modèle, avec bascule entre la fenêtre live (1 h) et le cumul.
+ * Le global écrase vite le live une fois l'historique constitué : garder les
+ * deux sous le même œil est tout l'intérêt.
+ */
+function ModelBreakdown({ snap }: { snap: LiveSnapshot }) {
+  const [scope, setScope] = useState<"recent" | "global">("recent");
+  const rows = snap.byModel[scope];
+  const totals =
+    scope === "recent"
+      ? { tokens: snap.recent.tokens, costUsd: snap.recent.costUsd }
+      : { tokens: snap.tokens.total, costUsd: snap.costUsd };
+
+  return (
+    <section className="flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <h3 className="text-xs font-semibold text-neutral-300">
+          Tokens par modèle
+        </h3>
+        <div className="flex rounded border border-neutral-800 p-0.5 text-[10px]">
+          {(
+            [
+              ["recent", "1 h"],
+              ["global", "global"],
+            ] as const
+          ).map(([k, label]) => (
+            <button
+              key={k}
+              type="button"
+              onClick={() => setScope(k)}
+              aria-pressed={scope === k}
+              className={`rounded px-1.5 py-0.5 transition ${
+                scope === k
+                  ? "bg-neutral-800 text-neutral-100"
+                  : "text-neutral-500 hover:text-neutral-300"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {rows.length > 0 ? (
+        <>
+          <ul className="flex max-h-40 flex-col gap-1 overflow-y-auto">
+            {rows.map((r) => (
+              <ModelRow key={`${r.provider}/${r.model}`} row={r} />
+            ))}
+          </ul>
+          <div className="flex items-baseline justify-between border-t border-neutral-800 pt-1.5 text-[11px]">
+            <span className="text-neutral-500">Total</span>
+            <span className="font-mono text-neutral-200">
+              {formatTokens(totals.tokens)} · ${totals.costUsd.toFixed(4)}
+            </span>
+          </div>
+        </>
+      ) : (
+        <p className="text-xs text-neutral-500">
+          {scope === "recent"
+            ? "Rien consommé sur la dernière heure."
+            : "Aucune consommation journalisée."}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function ModelRow({ row: r }: { row: ModelUsageRow }) {
+  const kind = providerKind(r.provider);
+  return (
+    <li className="flex items-center gap-2 text-[11px]">
+      <span
+        className={`shrink-0 rounded px-1 py-0.5 font-mono text-[9px] ${kind.style}`}
+        title={r.provider}
+      >
+        {kind.label}
+      </span>
+      <span className="min-w-0 flex-1 truncate" title={`${r.provider}/${r.model}`}>
+        <span className="text-neutral-300">{r.model}</span>
+        <span className="text-neutral-600"> · {providerName(r.provider)}</span>
+      </span>
+      <span
+        className="shrink-0 font-mono text-neutral-400"
+        title={`${r.promptTokens.toLocaleString("fr-FR")} entrée · ${r.completionTokens.toLocaleString(
+          "fr-FR",
+        )} sortie · ${r.count} appel${r.count > 1 ? "s" : ""}`}
+      >
+        {formatTokens(r.tokens)}
+      </span>
+      <span className="w-14 shrink-0 text-right font-mono text-neutral-500">
+        ${r.costUsd.toFixed(4)}
+      </span>
+    </li>
   );
 }
 
@@ -217,27 +311,6 @@ function AgentRow({ agent: a }: { agent: LiveAgent }) {
         </span>
       </Link>
     </li>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  accent,
-}: {
-  label: string;
-  value: string;
-  accent?: string;
-}) {
-  return (
-    <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 px-2.5 py-1.5">
-      <div className="text-[10px] uppercase tracking-wide text-neutral-500">
-        {label}
-      </div>
-      <div className={`mt-0.5 font-mono text-sm ${accent ?? "text-neutral-100"}`}>
-        {value}
-      </div>
-    </div>
   );
 }
 
