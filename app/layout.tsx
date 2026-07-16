@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { LiveHud } from "@/components/live-hud";
 import { TopNav } from "@/components/top-nav";
 import "./globals.css";
 
@@ -19,6 +20,7 @@ export default function RootLayout({
       <body>
         <TopNav />
         {children}
+        <LiveHud />
       </body>
     </html>
   );

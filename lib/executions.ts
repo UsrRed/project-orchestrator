@@ -7,7 +7,7 @@
  */
 import "server-only";
 
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, gte, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import type { CliExecProvider } from "@/lib/cli-agents";
@@ -165,6 +165,37 @@ export async function executionHealth(
     succeeded: row?.succeeded ?? 0,
     failureRate: total > 0 ? failed / total : 0,
     totalCostUsd: Number(row?.totalCostUsd ?? 0),
+  };
+}
+
+/**
+ * Consommation sur une fenêtre récente (tokens, coût, nombre d'appels).
+ *
+ * Le total cumulé ne bouge presque plus une fois le compte ancien : c'est ce
+ * delta glissant qui montre ce que les agents consomment *en ce moment*.
+ */
+export async function executionUsageSince(
+  userId: string,
+  since: Date,
+): Promise<{ tokens: number; costUsd: number; count: number }> {
+  const [row] = await db
+    .select({
+      count: sql<number>`count(*)::int`,
+      tokens: sql<number>`coalesce(sum(${agentExecutions.promptTokens} + ${agentExecutions.completionTokens}), 0)::int`,
+      costUsd: sql<string>`coalesce(sum(${agentExecutions.costUsd}), 0)`,
+    })
+    .from(agentExecutions)
+    .where(
+      and(
+        eq(agentExecutions.userId, userId),
+        gte(agentExecutions.createdAt, since),
+      ),
+    );
+
+  return {
+    count: row?.count ?? 0,
+    tokens: row?.tokens ?? 0,
+    costUsd: Number(row?.costUsd ?? 0),
   };
 }
 

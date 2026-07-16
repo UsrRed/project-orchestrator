@@ -303,6 +303,27 @@ export async function runHealth(userId: string): Promise<RunHealth> {
   return health;
 }
 
+/**
+ * Runs en cours ou en file — ce qui « tourne » du point de vue de
+ * l'utilisateur. Les plus récemment lancés d'abord.
+ */
+export async function listActiveRuns(userId: string): Promise<RunRow[]> {
+  const rows = await db
+    .select()
+    .from(autonomousRuns)
+    .where(
+      and(
+        eq(autonomousRuns.userId, userId),
+        or(
+          eq(autonomousRuns.status, "queued"),
+          eq(autonomousRuns.status, "running"),
+        ),
+      ),
+    )
+    .orderBy(desc(autonomousRuns.createdAt));
+  return rows.map(mapRow);
+}
+
 /** Derniers runs de l'utilisateur (tous statuts confondus). */
 export async function listRecentRuns(
   userId: string,
