@@ -88,12 +88,24 @@ export async function setTaskMode(
 
 // --- Messages ------------------------------------------------------------
 
+/**
+ * `auto_step` a un sens précis : **une étape de travail effectuée par l'agent**.
+ * Les moteurs relisent ces messages pour reconstruire « la progression jusqu'ici »
+ * et les donnent au modèle comme exemple de ce qu'on attend de lui — d'où
+ * `auto_plan` et `auto_notice`, qui s'affichent dans le journal mais ne sont pas
+ * du travail. Y ranger le plan du run apprenait au modèle à commenter le run au
+ * lieu de produire le livrable.
+ */
 export type MessageKind =
   | "text"
   | "cowork_options"
   | "cowork_choice"
   | "artifact"
-  | "auto_step";
+  | "auto_step"
+  /** Plan du run (niveau, limites, source) — contexte, pas progression. */
+  | "auto_plan"
+  /** Avis de service : run abandonné, aucune source disponible… */
+  | "auto_notice";
 
 export interface CoworkOption {
   title: string;
@@ -111,6 +123,28 @@ export interface MessageView {
   kind: MessageKind;
   data: unknown;
   createdAt: Date;
+}
+
+/**
+ * Les étapes de travail **du run donné**, dans l'ordre.
+ *
+ * Le fil appartient à la tâche, pas au run : sans ce filtre, un second run
+ * relisait les étapes du premier comme si elles étaient les siennes et
+ * repartait de sa progression — voire imitait ses travers. Un run doit partir
+ * de zéro sur une tâche déjà travaillée.
+ *
+ * Les notes antérieures à l'ajout de `data.runId` n'ont pas d'identifiant : les
+ * exclure est le bon comportement, ce sont d'anciens runs.
+ */
+export function runNotes(
+  messages: readonly MessageView[],
+  runId: string,
+): MessageView[] {
+  return messages.filter((m) => {
+    if (m.kind !== "auto_step") return false;
+    const d = m.data as { runId?: string } | null | undefined;
+    return d?.runId === runId;
+  });
 }
 
 /** Insère un message (l'appelant a déjà vérifié l'appartenance). */

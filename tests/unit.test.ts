@@ -34,6 +34,7 @@ import {
   isMethodSupported,
 } from "@/lib/providers";
 import { findFreeModel, findModel, specForModel } from "@/lib/models";
+import { runNotes } from "@/lib/conversation";
 import { heuristicPlan, resolveSource } from "@/lib/run-planner";
 import { fullSourceOrder, parseSourceOrder } from "@/lib/sources";
 import {
@@ -279,6 +280,52 @@ describe("routage dynamique : résolution de la source", () => {
       cliAgents: [{ ...CLIS[0]!, available: false }],
     });
     expect(resolved).toBeNull();
+  });
+});
+
+describe("progression d'un run : notes du bon run, et rien d'autre", () => {
+  const msg = (
+    kind: string,
+    content: string,
+    data?: unknown,
+  ): Parameters<typeof runNotes>[0][number] =>
+    ({
+      id: content,
+      role: "assistant",
+      content,
+      kind,
+      data,
+      createdAt: new Date(0),
+    }) as Parameters<typeof runNotes>[0][number];
+
+  it("ne renvoie que les étapes du run demandé", () => {
+    const all = [
+      msg("auto_step", "run A étape 1", { runId: "A" }),
+      msg("auto_step", "run B étape 1", { runId: "B" }),
+      msg("auto_step", "run A étape 2", { runId: "A" }),
+    ];
+    expect(runNotes(all, "A").map((m) => m.content)).toEqual([
+      "run A étape 1",
+      "run A étape 2",
+    ]);
+  });
+
+  it("exclut le plan et les avis de service", () => {
+    // Le plan écrit en `auto_step` était relu comme une étape de travail : le
+    // modèle en déduisait qu'on attend des commentaires sur le run, et
+    // annonçait ses itérations au lieu de produire le livrable.
+    const all = [
+      msg("auto_plan", "Plan du run — niveau 2 requis…", { runId: "A" }),
+      msg("auto_notice", "Aucune source disponible", { runId: "A" }),
+      msg("artifact", "Artefact produit", { runId: "A" }),
+      msg("text", "message utilisateur"),
+      msg("auto_step", "vrai travail", { runId: "A" }),
+    ];
+    expect(runNotes(all, "A").map((m) => m.content)).toEqual(["vrai travail"]);
+  });
+
+  it("exclut les notes sans identifiant de run (runs antérieurs)", () => {
+    expect(runNotes([msg("auto_step", "vieille note")], "A")).toEqual([]);
   });
 });
 

@@ -18,7 +18,13 @@ import {
   type CliAgentId,
   type CliAgentInfo,
 } from "@/lib/cli-agents";
-import { addArtifact, addMessage, getTaskContext, listMessages } from "@/lib/conversation";
+import {
+  addArtifact,
+  addMessage,
+  getTaskContext,
+  listMessages,
+  runNotes,
+} from "@/lib/conversation";
 import { projectBudgetExceeded } from "@/lib/budgets";
 import { buildPhaseNormsContext } from "@/lib/normes";
 import { recordExecution } from "@/lib/executions";
@@ -175,8 +181,7 @@ export function makeCliAgentDeps(userId: string, cliId: CliAgentId): WorkerDeps 
     const ws = await ensureWorkspace(userId, taskCtx.projectId);
     const norms = await buildPhaseNormsContext(userId, taskCtx.phaseId);
 
-    const priorNotes = (await listMessages(userId, ctx.taskId))
-      .filter((m) => m.kind === "auto_step")
+    const priorNotes = runNotes(await listMessages(userId, ctx.taskId), ctx.runId)
       .map((m, i) => `${i + 1}. ${m.content}`)
       .join("\n");
 

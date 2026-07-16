@@ -38,6 +38,21 @@ export type RunEngine = "auto" | "llm" | "cli";
 /** Moteur réellement exécutable (ce que `auto` devient une fois résolu). */
 export type ResolvedRunEngine = Exclude<RunEngine, "auto">;
 
+/** Le livrable d'un run `llm`, dans l'état où la dernière itération l'a laissé. */
+export interface RunDraft {
+  title: string;
+  content: string;
+}
+
+/** Lecture défensive du jsonb : une colonne libre peut contenir n'importe quoi. */
+function mapDraft(v: unknown): RunDraft | null {
+  if (!v || typeof v !== "object") return null;
+  const d = v as Record<string, unknown>;
+  return typeof d.title === "string" && typeof d.content === "string"
+    ? { title: d.title, content: d.content }
+    : null;
+}
+
 export interface RunRow {
   id: string;
   userId: string;
@@ -55,6 +70,11 @@ export interface RunRow {
   planner: "ai" | "heuristic" | null;
   sourceKind: SourceKind | null;
   sourceLabel: string | null;
+  /**
+   * Livrable en cours (moteur `llm`). C'est l'état de travail que chaque
+   * itération relit et réécrit — et ce qu'on sauve si un garde-fou coupe.
+   */
+  draft: RunDraft | null;
   /** Null = à estimer par l'IA ; une valeur = imposée par l'utilisateur. */
   maxIterations: number | null;
   /** 0 = gratuit/abonnement uniquement (défaut), pas « plafond atteint ». */
@@ -94,6 +114,7 @@ function mapRow(r: typeof autonomousRuns.$inferSelect): RunRow {
       r.planner === "ai" || r.planner === "heuristic" ? r.planner : null,
     sourceKind: (r.sourceKind as SourceKind) ?? null,
     sourceLabel: r.sourceLabel,
+    draft: mapDraft(r.draft),
     maxIterations: r.maxIterations,
     maxCostUsd: Number(r.maxCostUsd),
     timeoutMin: r.timeoutMin,
@@ -260,6 +281,23 @@ export async function claimNextRun(
 
     return updated ? mapRow(updated) : null;
   });
+}
+
+/**
+ * Remplace le livrable en cours par la version que vient de rendre l'itération.
+ *
+ * Écrasement plutôt qu'historique : le modèle renvoie le document **complet** à
+ * chaque étape, et garder les versions intermédiaires ferait grossir la ligne
+ * sans que rien ne les relise.
+ */
+export async function saveDraft(
+  runId: string,
+  draft: RunDraft,
+): Promise<void> {
+  await db
+    .update(autonomousRuns)
+    .set({ draft, lockedAt: sql`now()` })
+    .where(eq(autonomousRuns.id, runId));
 }
 
 /**

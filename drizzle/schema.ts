@@ -502,6 +502,19 @@ export const autonomousRuns = pgTable("autonomous_runs", {
   spentUsd: numeric("spent_usd", { precision: 12, scale: 6 })
     .notNull()
     .default("0"),
+  /**
+   * Livrable en cours de rédaction : `{ title, content }`, remplacé à chaque
+   * itération par la version complète que le modèle renvoie.
+   *
+   * **Sans cette colonne, un moteur `llm` n'a nulle part où travailler** : il ne
+   * transmettait qu'une note de 1-2 phrases d'une étape à l'autre, si bien qu'il
+   * ne pouvait qu'annoncer ce qu'il allait faire, jamais le faire. C'est aussi ce
+   * qu'on sauve en artefact quand un garde-fou coupe le run, au lieu de jeter le
+   * travail.
+   *
+   * Sans objet pour le moteur `cli`, dont le livrable est le workspace lui-même.
+   */
+  draft: jsonb("draft"),
   /** Verrou de worker (claim) : horodatage de prise en charge. */
   lockedAt: timestamp("locked_at", { withTimezone: true }),
   /** Raison d'arrêt : completed | budget | iterations | timeout | killed | error. */

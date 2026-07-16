@@ -77,7 +77,9 @@ async function prepareRun(run: RunRow): Promise<PreparedRun | null> {
     await addMessage(run.taskId, {
       role: "assistant",
       content: message,
-      kind: "auto_step",
+      // Surtout pas `auto_step` : les moteurs relisent ces messages-là comme la
+      // progression du run et les imiteraient.
+      kind: "auto_notice",
     });
     await finishRun(run.id, "failed", "error", message);
     return null;
@@ -156,7 +158,7 @@ async function prepareRun(run: RunRow): Promise<PreparedRun | null> {
       (plan.planner === "heuristic"
         ? " (estimation par défaut : aucun modèle gratuit n'était disponible pour évaluer.)"
         : ""),
-    kind: "auto_step",
+    kind: "auto_plan",
   });
 
   const fresh = await getRunFresh(run.id);

@@ -1,0 +1,1 @@
+ALTER TABLE "autonomous_runs" ADD COLUMN "draft" jsonb;

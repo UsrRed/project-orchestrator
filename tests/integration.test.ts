@@ -309,6 +309,60 @@ describe("runs autonomes & garde-fous", () => {
     expect(planned?.timeoutAt?.getTime()).toBe(now.getTime() + 10 * 60_000);
   });
 
+  it("itérations épuisées : le livrable est sauvé au lieu d'être jeté", async () => {
+    const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
+    const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;
+    await enqueueRun(userId, taskId, { goal: "maquettes", maxIterations: 2, maxCostUsd: 0 });
+    const claimed = await claimNextRun(new Date());
+
+    // Un agent qui n'aboutit jamais mais qui produit : exactement le cas des
+    // maquettes d'échecs (5/5 itérations, zéro artefact sauvegardé).
+    const saved: { title: string; salvaged: boolean }[] = [];
+    const final = await processRun(claimed!, {
+      stepFn: async (ctx) => ({
+        done: false,
+        note: `étape ${ctx.iteration + 1}`,
+        costUsd: 0,
+        draft: { title: "Maquettes", content: `# v${ctx.iteration + 1}` },
+      }),
+      onArtifact: async (_run, artifact, opts) => {
+        saved.push({ title: artifact.title, salvaged: Boolean(opts?.salvaged) });
+      },
+    });
+
+    expect(final.stopReason).toBe("iterations");
+    expect(final.status).toBe("failed"); // le run n'a pas convergé : on le dit.
+    // …mais le travail est conservé, dans sa dernière version, et annoncé comme
+    // inachevé.
+    expect(saved).toEqual([{ title: "Maquettes", salvaged: true }]);
+    expect(final.draft?.content).toBe("# v2");
+  });
+
+  it("objectif atteint : l'artefact est produit une seule fois, non marqué inachevé", async () => {
+    const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
+    const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;
+    await enqueueRun(userId, taskId, { goal: "g", maxIterations: 5, maxCostUsd: 0 });
+    const claimed = await claimNextRun(new Date());
+
+    const saved: { salvaged: boolean }[] = [];
+    const final = await processRun(claimed!, {
+      stepFn: async () => ({
+        done: true,
+        note: "fini",
+        costUsd: 0,
+        draft: { title: "Doc", content: "# ok" },
+        artifact: { title: "Doc", content: "# ok" },
+      }),
+      onArtifact: async (_run, _artifact, opts) => {
+        saved.push({ salvaged: Boolean(opts?.salvaged) });
+      },
+    });
+
+    expect(final.stopReason).toBe("completed");
+    // Un seul artefact : le succès ne doit pas déclencher AUSSI le sauvetage.
+    expect(saved).toEqual([{ salvaged: false }]);
+  });
+
   it("le battement de verrou empêche un second worker de reprendre un run vivant", async () => {
     const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
     const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;

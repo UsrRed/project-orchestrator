@@ -16,6 +16,7 @@ import {
   finishRun,
   getRunFresh,
   recordIteration,
+  saveDraft,
   type RunRow,
 } from "@/lib/runs";
 import { captureException, logInfo } from "@/lib/observability";
@@ -43,6 +44,15 @@ export interface StepResult {
   /** Artefact éventuel produit à cette étape. */
   artifact?: StepArtifact;
   /**
+   * Livrable **complet** dans son état actuel, à conserver pour l'itération
+   * suivante. Persisté sur le run et resservi tel quel : c'est le plan de
+   * travail de l'agent, sans quoi il n'a que sa note de 1-2 phrases pour se
+   * souvenir de ce qu'il produit.
+   *
+   * Sans objet pour un moteur qui écrit ailleurs (le `cli` a son workspace).
+   */
+  draft?: StepArtifact;
+  /**
    * Données libres transmises telles quelles à `onNote`, pour ce qu'une étape
    * doit se rappeler d'une itération à l'autre (le moteur `cli` y range
    * l'identifiant de session à reprendre). Volontairement opaque : la boucle
@@ -64,8 +74,16 @@ export interface WorkerDeps {
     note: string,
     meta?: Record<string, unknown>,
   ) => Promise<void>;
-  /** Persistance d'un artefact produit. */
-  onArtifact?: (run: RunRow, artifact: StepArtifact) => Promise<void>;
+  /**
+   * Persistance d'un artefact produit. `salvaged` → le run a été coupé par un
+   * garde-fou et c'est le livrable **en l'état**, pas un travail achevé : à ne
+   * pas présenter comme tel.
+   */
+  onArtifact?: (
+    run: RunRow,
+    artifact: StepArtifact,
+    opts?: { salvaged?: boolean },
+  ) => Promise<void>;
   /** Garde-fou budget projet : true → arrêt (raison project_budget). */
   budgetExceeded?: (run: RunRow) => Promise<boolean>;
   now?: () => Date;
@@ -122,6 +140,29 @@ export async function processRun(
   const now = deps.now ?? (() => new Date());
   const runId = claimed.id;
 
+  /**
+   * Termine le run — et **sauve d'abord le livrable en cours** si l'arrêt n'est
+   * pas un succès.
+   *
+   * Un garde-fou qui coupe (itérations épuisées, timeout, plafond, kill) coupait
+   * aussi le travail déjà produit : le brouillon mourait avec le run, et
+   * l'utilisateur ne récupérait rien de ce qu'il avait payé en temps de calcul.
+   * Le statut reste un échec — le run n'a pas convergé, et le dire est utile —
+   * mais l'artefact, lui, est conservé.
+   *
+   * Point de passage unique : tous les chemins d'arrêt passent ici, sinon il
+   * suffit d'en oublier un pour reperdre le brouillon.
+   */
+  const stop = async (reason: StopReason, error?: string): Promise<void> => {
+    if (reason !== "completed") {
+      const run = await getRunFresh(runId);
+      if (run?.draft && deps.onArtifact) {
+        await deps.onArtifact(run, run.draft, { salvaged: true });
+      }
+    }
+    await finishRun(runId, TERMINAL[reason], reason, error, now());
+  };
+
   // Boucle bornée par maxIterations (garantit la terminaison même si stepFn
   // ne renvoie jamais done et qu'aucun autre garde-fou ne se déclenche).
   for (;;) {
@@ -130,19 +171,16 @@ export async function processRun(
 
     const preStop = guardStop(fresh, now());
     if (preStop) {
-      await finishRun(
-        runId,
-        TERMINAL[preStop],
+      await stop(
         preStop,
         preStop === "error"
           ? "Run démarré sans limites : la planification n'a pas eu lieu."
           : undefined,
-        now(),
       );
       break;
     }
     if (deps.budgetExceeded && (await deps.budgetExceeded(fresh))) {
-      await finishRun(runId, "failed", "project_budget", undefined, now());
+      await stop("project_budget");
       break;
     }
 
@@ -164,15 +202,14 @@ export async function processRun(
         taskId: fresh.taskId,
         iteration: fresh.iterations,
       });
-      await finishRun(
-        runId,
-        "failed",
-        "error",
-        err instanceof Error ? err.message : String(err),
-        now(),
-      );
+      await stop("error", err instanceof Error ? err.message : String(err));
       break;
     }
+
+    // Avant la note et le comptage : c'est le travail lui-même. Une étape qui
+    // avance le livrable puis meurt sur un incident doit tout de même le laisser
+    // derrière elle.
+    if (result.draft) await saveDraft(runId, result.draft);
 
     if (result.note && deps.onNote) {
       await deps.onNote(fresh, result.note, result.meta);
@@ -183,7 +220,7 @@ export async function processRun(
     }
 
     if (result.done) {
-      await finishRun(runId, "succeeded", "completed", undefined, now());
+      await stop("completed");
       break;
     }
 
@@ -193,11 +230,11 @@ export async function processRun(
     if (after) {
       const postStop = guardStop(after, now());
       if (postStop) {
-        await finishRun(runId, TERMINAL[postStop], postStop, undefined, now());
+        await stop(postStop);
         break;
       }
       if (deps.budgetExceeded && (await deps.budgetExceeded(after))) {
-        await finishRun(runId, "failed", "project_budget", undefined, now());
+        await stop("project_budget");
         break;
       }
     }
