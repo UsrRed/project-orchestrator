@@ -14,6 +14,8 @@ import {
   defaultMethod,
   isMethodSupported,
 } from "@/lib/providers";
+import { findModel, specForModel } from "@/lib/models";
+import { listCatalogModels, pickModelForTier } from "@/lib/model-catalog";
 
 describe("crypto", () => {
   it("round-trip encrypt/decrypt", () => {
@@ -170,6 +172,43 @@ describe("connecteurs : registre & aide", () => {
     const g = credentialHelp("google", "oauth");
     expect(g?.command).toBe("gcloud auth print-access-token");
     expect(credentialHelp("ollama", "none")).toBeNull();
+  });
+});
+
+describe("catalogue de modèles (models.dev)", () => {
+  it("expose tous les modèles d'un provider avec coûts", () => {
+    const anthropic = listCatalogModels("anthropic");
+    expect(anthropic.length).toBeGreaterThan(5);
+    expect(anthropic.every((m) => m.input > 0 && m.context > 0)).toBe(true);
+    expect(listCatalogModels("openrouter").length).toBeGreaterThan(100);
+  });
+
+  it("pickModelForTier : fast ≤ frontier (coût)", () => {
+    const fast = pickModelForTier("anthropic", "fast");
+    const frontier = pickModelForTier("anthropic", "frontier");
+    expect(fast).toBeDefined();
+    expect(frontier).toBeDefined();
+    expect(fast!.input + fast!.output).toBeLessThanOrEqual(
+      frontier!.input + frontier!.output,
+    );
+  });
+
+  it("findModel : provider cloud depuis le catalogue, local à coût nul", () => {
+    const a = findModel("anthropic", "frontier");
+    expect(a?.provider).toBe("anthropic");
+    expect(a!.inputPerMTok).toBeGreaterThan(0);
+
+    const local = findModel("ollama", "fast");
+    expect(local?.provider).toBe("ollama");
+    expect(local!.inputPerMTok).toBe(0);
+  });
+
+  it("specForModel : construit un spec pour un modèle précis du catalogue", () => {
+    const anyModel = listCatalogModels("openai")[0]!;
+    const spec = specForModel("openai", anyModel.id, "fast");
+    expect(spec?.modelId).toBe(anyModel.id);
+    expect(spec?.inputPerMTok).toBe(anyModel.input);
+    expect(specForModel("openai", "modele-inexistant-xyz", "fast")).toBeUndefined();
   });
 });
 

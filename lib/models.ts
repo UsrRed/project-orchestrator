@@ -1,14 +1,18 @@
 /**
- * Catalogue de modèles et tarification (USD par million de tokens).
+ * Types de modèles + tarification. Le catalogue réel (tous les modèles de
+ * chaque provider, avec coût/contexte) vient de **models.dev**
+ * ([lib/model-catalog.ts](model-catalog.ts)) ; ici on ne garde que les types,
+ * le calcul de coût, et la construction d'un `ModelSpec` par tier.
  *
  * Deux "tiers" alimentent le routeur :
- *  - "fast"   : modèles économiques/rapides pour tâches simples & faible contexte ;
- *  - "frontier": modèles haut de gamme pour tâches complexes & grand contexte.
- *
- * Les prix sont indicatifs (ordres de grandeur 2025-2026) et servent au calcul
- * du coût réel journalisé dans `agent_executions`. À ajuster/synchroniser
- * régulièrement — ne pas les considérer comme contractuels.
+ *  - "fast"    : le modèle le moins cher du provider (tâches simples) ;
+ *  - "frontier": le modèle haut de gamme du provider (tâches complexes).
  */
+import {
+  getCatalogModel,
+  pickModelForTier,
+} from "@/lib/model-catalog";
+
 export type Provider =
   | "anthropic"
   | "openai"
@@ -39,110 +43,17 @@ export interface ModelSpec {
  */
 export const LOCAL_MODEL_ID = process.env.LOCAL_AI_MODEL ?? "qwen-active";
 
-export const MODEL_CATALOG: readonly ModelSpec[] = [
-  // --- Local (LM Studio / Ollama), OpenAI-compatible, gratuit ---
-  {
+/** Spec du modèle local (LM Studio / Ollama), coût nul. */
+function localSpec(tier: Tier): ModelSpec {
+  return {
     provider: "ollama",
     modelId: LOCAL_MODEL_ID,
-    tier: "fast",
+    tier,
     inputPerMTok: 0,
     outputPerMTok: 0,
     contextWindow: 32_768,
-  },
-  {
-    provider: "ollama",
-    modelId: LOCAL_MODEL_ID,
-    tier: "frontier",
-    inputPerMTok: 0,
-    outputPerMTok: 0,
-    contextWindow: 32_768,
-  },
-  // --- Anthropic ---
-  {
-    provider: "anthropic",
-    modelId: "claude-3-5-haiku-latest",
-    tier: "fast",
-    inputPerMTok: 0.8,
-    outputPerMTok: 4,
-    contextWindow: 200_000,
-  },
-  {
-    provider: "anthropic",
-    modelId: "claude-3-5-sonnet-latest",
-    tier: "frontier",
-    inputPerMTok: 3,
-    outputPerMTok: 15,
-    contextWindow: 200_000,
-  },
-  // --- OpenAI ---
-  {
-    provider: "openai",
-    modelId: "gpt-4o-mini",
-    tier: "fast",
-    inputPerMTok: 0.15,
-    outputPerMTok: 0.6,
-    contextWindow: 128_000,
-  },
-  {
-    provider: "openai",
-    modelId: "gpt-4o",
-    tier: "frontier",
-    inputPerMTok: 2.5,
-    outputPerMTok: 10,
-    contextWindow: 128_000,
-  },
-  // --- Google Gemini ---
-  {
-    provider: "google",
-    modelId: "gemini-1.5-flash",
-    tier: "fast",
-    inputPerMTok: 0.075,
-    outputPerMTok: 0.3,
-    contextWindow: 1_000_000,
-  },
-  {
-    provider: "google",
-    modelId: "gemini-1.5-pro",
-    tier: "frontier",
-    inputPerMTok: 1.25,
-    outputPerMTok: 5,
-    contextWindow: 2_000_000,
-  },
-  // --- Groq (open-weights, ultra-rapide) ---
-  {
-    provider: "groq",
-    modelId: "llama-3.1-8b-instant",
-    tier: "fast",
-    inputPerMTok: 0.05,
-    outputPerMTok: 0.08,
-    contextWindow: 128_000,
-  },
-  {
-    provider: "groq",
-    modelId: "llama-3.3-70b-versatile",
-    tier: "frontier",
-    inputPerMTok: 0.59,
-    outputPerMTok: 0.79,
-    contextWindow: 128_000,
-  },
-  // --- OpenRouter (agrégateur ; modelId = slug OpenRouter) ---
-  {
-    provider: "openrouter",
-    modelId: "meta-llama/llama-3.1-8b-instruct",
-    tier: "fast",
-    inputPerMTok: 0.02,
-    outputPerMTok: 0.03,
-    contextWindow: 128_000,
-  },
-  {
-    provider: "openrouter",
-    modelId: "anthropic/claude-3.5-sonnet",
-    tier: "frontier",
-    inputPerMTok: 3,
-    outputPerMTok: 15,
-    contextWindow: 200_000,
-  },
-] as const;
+  };
+}
 
 /** Coût USD pour un nombre de tokens d'entrée/sortie donné. */
 export function computeCostUsd(
@@ -155,10 +66,44 @@ export function computeCostUsd(
   return input + output;
 }
 
-/** Retourne le premier modèle du tier voulu pour un provider donné. */
+/**
+ * ModelSpec du tier voulu pour un provider, à partir du catalogue models.dev
+ * (le local a un coût nul). `undefined` si le provider n'a aucun modèle éligible.
+ */
 export function findModel(
   provider: Provider,
   tier: Tier,
 ): ModelSpec | undefined {
-  return MODEL_CATALOG.find((m) => m.provider === provider && m.tier === tier);
+  if (provider === "ollama") return localSpec(tier);
+  const m = pickModelForTier(provider, tier);
+  if (!m) return undefined;
+  return {
+    provider,
+    modelId: m.id,
+    tier,
+    inputPerMTok: m.input,
+    outputPerMTok: m.output,
+    contextWindow: m.context,
+  };
+}
+
+/** ModelSpec pour un modèle précis choisi dans le catalogue (sélection UI). */
+export function specForModel(
+  provider: Provider,
+  modelId: string,
+  tier: Tier,
+): ModelSpec | undefined {
+  if (provider === "ollama") {
+    return { ...localSpec(tier), modelId };
+  }
+  const m = getCatalogModel(provider, modelId);
+  if (!m) return undefined;
+  return {
+    provider,
+    modelId: m.id,
+    tier,
+    inputPerMTok: m.input,
+    outputPerMTok: m.output,
+    contextWindow: m.context,
+  };
 }

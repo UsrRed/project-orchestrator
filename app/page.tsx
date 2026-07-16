@@ -6,6 +6,8 @@ import { RouterDemo } from "@/components/router-demo";
 import { UserMenu } from "@/components/user-menu";
 import { executionStats, listExecutions } from "@/lib/executions";
 import { listConnections } from "@/lib/keys";
+import { catalogModelCount, fetchLocalModels } from "@/lib/model-catalog";
+import { PROVIDERS } from "@/lib/providers";
 import { getCurrentUserId } from "@/lib/users";
 
 const MILESTONES: Array<{ id: string; label: string; done: boolean }> = [
@@ -23,11 +25,19 @@ export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const userId = await getCurrentUserId();
-  const [connections, executions, stats] = await Promise.all([
+  const [connections, executions, stats, localModels] = await Promise.all([
     listConnections(userId),
     listExecutions(userId),
     executionStats(userId),
+    fetchLocalModels(),
   ]);
+
+  // Nombre de modèles disponibles par provider (catalogue models.dev + local).
+  const modelCounts: Record<string, number> = {};
+  for (const p of PROVIDERS) {
+    modelCounts[p.id] =
+      p.id === "ollama" ? localModels.length : catalogModelCount(p.id);
+  }
 
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-10 px-6 py-16">
@@ -69,12 +79,17 @@ export default async function Home() {
       </div>
 
       <section className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">
-        <h2 className="mb-1 text-lg font-semibold">Connecteurs LLM</h2>
+        <div className="mb-1 flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Connecteurs LLM</h2>
+          <Link href="/models" className="text-xs text-emerald-400 hover:underline">
+            Voir tous les modèles →
+          </Link>
+        </div>
         <p className="mb-4 text-sm text-neutral-500">
-          Clé API, jeton OAuth (Bearer) ou serveur local — le secret est stocké
-          chiffré (AES-256-GCM) ; le client ne reçoit qu&apos;un aperçu masqué.
+          Choisis un provider, colle ta clé — tous ses modèles deviennent
+          disponibles (catalogue models.dev). Secret stocké chiffré.
         </p>
-        <KeysManager connections={connections} />
+        <KeysManager connections={connections} modelCounts={modelCounts} />
       </section>
 
       <section className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">
