@@ -14,6 +14,7 @@ import {
   listMessages,
   type CoworkOptionsData,
 } from "@/lib/conversation";
+import { cliAgentStatuses } from "@/lib/cli-availability";
 import { listRunsForTask } from "@/lib/runs";
 import { listPhaseNormes } from "@/lib/normes";
 import { getCurrentUserId } from "@/lib/users";
@@ -137,7 +138,11 @@ export default async function TaskChatPage({
           coût vérifié à chaque étape, timeout, kill switch). Exécuté par le
           worker&nbsp;: <code>npm run worker</code>.
         </p>
-        <AutonomousPanel taskId={taskId} runs={runs} />
+        <AutonomousPanel
+          taskId={taskId}
+          runs={runs}
+          cliAgents={cliAgentStatuses()}
+        />
       </section>
 
       {/* Widgets « generative UI » (M6) */}

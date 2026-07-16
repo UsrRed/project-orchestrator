@@ -307,6 +307,31 @@ async function projectIdOfPhase(
   return row.projectId;
 }
 
+/** Rattachement Git d'un projet, sans charger toute son arborescence. */
+export async function getProjectRepo(
+  userId: string,
+  projectId: string,
+): Promise<ProjectRepo | null> {
+  const [row] = await db
+    .select({
+      mode: projects.repoMode,
+      fullName: projects.repoFullName,
+      url: projects.repoUrl,
+      private: projects.repoPrivate,
+    })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.userId, userId)))
+    .limit(1);
+
+  if (!row) return null;
+  return {
+    mode: row.mode as RepoMode,
+    fullName: row.fullName,
+    url: row.url,
+    private: row.private,
+  };
+}
+
 // --- Édition : projet ----------------------------------------------------
 
 export async function deleteProject(

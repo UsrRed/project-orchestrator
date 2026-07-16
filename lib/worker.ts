@@ -42,6 +42,13 @@ export interface StepResult {
   costUsd: number;
   /** Artefact éventuel produit à cette étape. */
   artifact?: StepArtifact;
+  /**
+   * Données libres transmises telles quelles à `onNote`, pour ce qu'une étape
+   * doit se rappeler d'une itération à l'autre (le moteur `cli` y range
+   * l'identifiant de session à reprendre). Volontairement opaque : la boucle
+   * n'a pas à connaître les moteurs.
+   */
+  meta?: Record<string, unknown>;
 }
 
 export type StepFn = (
@@ -52,7 +59,11 @@ export type StepFn = (
 export interface WorkerDeps {
   stepFn: StepFn;
   /** Persistance d'une note d'étape (ex: message dans le fil). */
-  onNote?: (run: RunRow, note: string) => Promise<void>;
+  onNote?: (
+    run: RunRow,
+    note: string,
+    meta?: Record<string, unknown>,
+  ) => Promise<void>;
   /** Persistance d'un artefact produit. */
   onArtifact?: (run: RunRow, artifact: StepArtifact) => Promise<void>;
   /** Garde-fou budget projet : true → arrêt (raison project_budget). */
@@ -138,7 +149,9 @@ export async function processRun(
       break;
     }
 
-    if (result.note && deps.onNote) await deps.onNote(fresh, result.note);
+    if (result.note && deps.onNote) {
+      await deps.onNote(fresh, result.note, result.meta);
+    }
     await recordIteration(runId, result.costUsd);
     if (result.artifact && deps.onArtifact) {
       await deps.onArtifact(fresh, result.artifact);

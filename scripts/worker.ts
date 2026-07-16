@@ -38,6 +38,7 @@ async function main(): Promise<void> {
   const { claimNextRun, finishRun } = await import("@/lib/runs");
   const { processRun } = await import("@/lib/worker");
   const { makeAutonomousDeps } = await import("@/lib/autonomous-agent");
+  const { makeCliAgentDeps } = await import("@/lib/cli-agent");
   const { getProviderConnections } = await import("@/lib/keys");
   const { captureException } = await import("@/lib/observability");
 
@@ -58,24 +59,34 @@ async function main(): Promise<void> {
       continue;
     }
 
-    console.log(`[worker] run ${claimed.id} réclamé (objectif: ${claimed.goal})`);
-    const keys = await getProviderConnections(claimed.userId);
-    if (Object.keys(keys).length === 0) {
-      await finishRun(
-        claimed.id,
-        "failed",
-        "error",
-        "Aucune clé API disponible pour exécuter ce run.",
-      );
-      console.log(`[worker] run ${claimed.id} → échec (aucune clé)`);
-      continue;
+    const engine =
+      claimed.engine === "cli" ? `cli:${claimed.engineCli}` : "llm";
+    console.log(
+      `[worker] run ${claimed.id} réclamé (${engine}) — objectif: ${claimed.goal}`,
+    );
+
+    // Un run `cli` n'a besoin d'aucune clé LLM : l'agent CLI s'authentifie avec
+    // son propre login. Exiger une clé ici le bloquerait sans raison.
+    let deps;
+    if (claimed.engine === "cli" && claimed.engineCli) {
+      deps = makeCliAgentDeps(claimed.userId, claimed.engineCli);
+    } else {
+      const keys = await getProviderConnections(claimed.userId);
+      if (Object.keys(keys).length === 0) {
+        await finishRun(
+          claimed.id,
+          "failed",
+          "error",
+          "Aucune clé API disponible pour exécuter ce run.",
+        );
+        console.log(`[worker] run ${claimed.id} → échec (aucune clé)`);
+        continue;
+      }
+      deps = makeAutonomousDeps(claimed.userId, keys);
     }
 
     try {
-      const final = await processRun(
-        claimed,
-        makeAutonomousDeps(claimed.userId, keys),
-      );
+      const final = await processRun(claimed, deps);
       console.log(
         `[worker] run ${claimed.id} → ${final.status} (${final.stopReason ?? "?"}) ` +
           `· ${final.iterations} itérations · $${final.spentUsd.toFixed(6)}`,

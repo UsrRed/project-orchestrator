@@ -13,6 +13,7 @@ import "server-only";
 import { and, asc, desc, eq, lt, or, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
+import { isCliAgentId, type CliAgentId } from "@/lib/cli-agents";
 import { autonomousRuns } from "@/drizzle/schema";
 
 export type RunStatus =
@@ -22,12 +23,18 @@ export type RunStatus =
   | "failed"
   | "cancelled";
 
+/** Moteur d'exécution d'un run : routeur LLM, ou agent CLI dans un workspace. */
+export type RunEngine = "llm" | "cli";
+
 export interface RunRow {
   id: string;
   userId: string;
   taskId: string;
   goal: string;
   status: RunStatus;
+  engine: RunEngine;
+  /** Renseigné si et seulement si `engine === "cli"`. */
+  engineCli: CliAgentId | null;
   maxIterations: number;
   maxCostUsd: number;
   timeoutAt: Date | null;
@@ -49,6 +56,9 @@ function mapRow(r: typeof autonomousRuns.$inferSelect): RunRow {
     taskId: r.taskId,
     goal: r.goal,
     status: r.status as RunStatus,
+    engine: r.engine === "cli" ? "cli" : "llm",
+    engineCli:
+      r.engineCli && isCliAgentId(r.engineCli) ? r.engineCli : null,
     maxIterations: r.maxIterations,
     maxCostUsd: Number(r.maxCostUsd),
     timeoutAt: r.timeoutAt,
@@ -66,10 +76,21 @@ function mapRow(r: typeof autonomousRuns.$inferSelect): RunRow {
 
 export interface EnqueueInput {
   goal: string;
+  engine?: RunEngine;
+  engineCli?: string;
   maxIterations?: number;
   maxCostUsd?: number;
   timeoutMs?: number;
 }
+
+/**
+ * Itérations par défaut selon le moteur.
+ *
+ * Un agent CLI boucle déjà en interne : une invocation suffit à mener
+ * l'objectif au bout. Le moteur `llm`, lui, avance par petites étapes et a
+ * besoin de plusieurs passes.
+ */
+const DEFAULT_MAX_ITERATIONS: Record<RunEngine, number> = { llm: 5, cli: 1 };
 
 /** Place un run en file (statut `queued`). L'appartenance de la tâche doit être
  *  vérifiée par l'appelant (action). */
@@ -82,6 +103,15 @@ export async function enqueueRun(
   const goal = input.goal.trim();
   if (!goal) throw new Error("Objectif du run vide.");
 
+  const engine: RunEngine = input.engine === "cli" ? "cli" : "llm";
+  // Un run `cli` sans CLI valide n'est pas exécutable : on refuse ici plutôt
+  // que de laisser le worker échouer après coup.
+  if (engine === "cli" && !(input.engineCli && isCliAgentId(input.engineCli))) {
+    throw new Error(
+      `Moteur CLI invalide : « ${input.engineCli ?? "(aucun)"} ».`,
+    );
+  }
+
   const timeoutAt =
     input.timeoutMs && input.timeoutMs > 0
       ? new Date(now.getTime() + input.timeoutMs)
@@ -93,7 +123,9 @@ export async function enqueueRun(
       userId,
       taskId,
       goal,
-      maxIterations: input.maxIterations ?? 5,
+      engine,
+      engineCli: engine === "cli" ? (input.engineCli as CliAgentId) : null,
+      maxIterations: input.maxIterations ?? DEFAULT_MAX_ITERATIONS[engine],
       maxCostUsd: (input.maxCostUsd ?? 0.5).toFixed(6),
       timeoutAt,
     })

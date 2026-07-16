@@ -27,6 +27,16 @@ import {
 
 // --- Enums ---------------------------------------------------------------
 
+/**
+ * Providers d'exécution journalisés dans `agent_executions`.
+ *
+ * Les 7 premiers sont les providers LLM du routeur (type `Provider` de
+ * [lib/models.ts](../lib/models.ts)). Les `*_cli` sont les agents CLI du moteur
+ * `cli` ([lib/cli-agents.ts](../lib/cli-agents.ts)) : ce ne sont pas des appels
+ * API mais des processus lancés sous le login du CLI. Les distinguer évite de
+ * confondre un run `claude` sur abonnement avec un appel API `anthropic` dans
+ * la lecture du coût.
+ */
 export const providerEnum = pgEnum("provider", [
   "anthropic",
   "openai",
@@ -35,6 +45,9 @@ export const providerEnum = pgEnum("provider", [
   "opencode",
   "groq",
   "ollama",
+  "claude_cli",
+  "gemini_cli",
+  "opencode_cli",
 ]);
 
 export const projectTypeEnum = pgEnum("project_type", ["tech", "marketing"]);
@@ -399,6 +412,17 @@ export const autonomousRuns = pgTable("autonomous_runs", {
     .references(() => tasks.id, { onDelete: "cascade" }),
   goal: text("goal").notNull(),
   status: runStatusEnum("status").notNull().default("queued"),
+  /**
+   * Moteur d'exécution : `llm` (routeur AI SDK, défaut historique) ou `cli`
+   * (agent CLI lancé dans le workspace du projet).
+   *
+   * `text` plutôt qu'un enum PG assumé : le registre des CLI bougera plus vite
+   * que les migrations, et `providerEnum` montre déjà le coût d'un enum à
+   * garder aligné à trois endroits.
+   */
+  engine: text("engine").notNull().default("llm"),
+  /** Quel CLI quand `engine = 'cli'` : claude | gemini | opencode. */
+  engineCli: text("engine_cli"),
   /** Garde-fous. */
   maxIterations: integer("max_iterations").notNull().default(5),
   maxCostUsd: numeric("max_cost_usd", { precision: 12, scale: 6 })

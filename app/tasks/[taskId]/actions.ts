@@ -16,6 +16,8 @@ import {
   listMessages,
   setTaskMode,
 } from "@/lib/conversation";
+import { isCliAgentId } from "@/lib/cli-agents";
+import { cliAgentStatuses } from "@/lib/cli-availability";
 import { recordExecution } from "@/lib/executions";
 import { getProviderConnections } from "@/lib/keys";
 import { assertWithinBudget } from "@/lib/budgets";
@@ -231,8 +233,12 @@ export async function startRunAction(
 ): Promise<RunFormState> {
   const taskId = String(formData.get("taskId") ?? "");
   const goal = String(formData.get("goal") ?? "").trim();
+  // Le formulaire envoie « llm » ou l'id d'un CLI (« claude »…) dans un seul
+  // champ : c'est un choix unique côté utilisateur.
+  const engineChoice = String(formData.get("engine") ?? "llm");
+  const isCli = engineChoice !== "llm";
   const maxIterations = Math.min(
-    Math.max(Number(formData.get("maxIterations") ?? 5), 1),
+    Math.max(Number(formData.get("maxIterations") ?? (isCli ? 1 : 5)), 1),
     20,
   );
   const maxCostUsd = Math.min(
@@ -247,17 +253,35 @@ export async function startRunAction(
   if (!taskId) return { ok: false, message: "Tâche manquante." };
   if (!goal) return { ok: false, message: "Décris l'objectif du run." };
 
+  if (isCli && !isCliAgentId(engineChoice)) {
+    return { ok: false, message: `Moteur inconnu : « ${engineChoice} ».` };
+  }
+
   const userId = await getCurrentUserId();
   const ctx = await getTaskContext(userId, taskId);
   if (!ctx) return { ok: false, message: "Tâche introuvable." };
 
-  const keys = await getProviderConnections(userId);
-  if (Object.keys(keys).length === 0) {
-    return {
-      ok: false,
-      message: "Aucune clé API. Ajoute-en une sur l'accueil avant de lancer.",
-    };
+  // Un agent CLI s'authentifie avec son propre login : lui réclamer une clé LLM
+  // n'aurait aucun sens. Le contrôle ne vaut que pour le moteur `llm`.
+  if (!isCli) {
+    const keys = await getProviderConnections(userId);
+    if (Object.keys(keys).length === 0) {
+      return {
+        ok: false,
+        message: "Aucune clé API. Ajoute-en une sur l'accueil avant de lancer.",
+      };
+    }
+  } else {
+    const status = cliAgentStatuses().find((s) => s.id === engineChoice);
+    if (!status?.available) {
+      return {
+        ok: false,
+        message:
+          status?.warning ?? `L'agent \`${engineChoice}\` n'est pas disponible.`,
+      };
+    }
   }
+
   try {
     await assertWithinBudget(ctx.projectId);
   } catch (err) {
@@ -266,6 +290,8 @@ export async function startRunAction(
 
   await enqueueRun(userId, taskId, {
     goal,
+    engine: isCli ? "cli" : "llm",
+    engineCli: isCli ? engineChoice : undefined,
     maxIterations,
     maxCostUsd,
     timeoutMs: timeoutMin * 60_000,

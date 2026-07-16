@@ -69,6 +69,11 @@ lib/
   runs.ts             Queue durable des runs autonomes (claim SKIP LOCKED)
   worker.ts           Exécuteur de run + garde-fous (fonction d'étape injectable)
   autonomous-agent.ts Câblage de production du worker (étape LLM réelle)
+  cli-agent.ts        Câblage du moteur `cli` : lance un agent de code réel
+  cli-agents.ts       Registre claude/gemini/opencode (args + parsing, pur)
+  cli-availability.ts Détection des CLI installés (PATH)
+  process.ts          Unique site de spawn : kill de groupe, timeout, env filtré
+  workspace.ts        Workspaces disque : clone/init du dépôt d'un projet
   normes.ts           CRUD normes, association par phase, préprompt traçable
   widgets.ts          Schéma Zod fixe des widgets + parsing sécurisé (M6)
   models.ts           Catalogue de modèles + tarification (calcul du coût réel)
@@ -174,6 +179,49 @@ La queue est **maison** (Postgres + worker), sans service externe :
 2. Le run est mis en file (`autonomous_runs`, statut `queued`).
 3. Le **worker** (`npm run worker`, processus séparé) réclame le run (`FOR UPDATE SKIP LOCKED`), l'exécute par itérations, vérifie les garde-fous **à chaque étape**, persiste coût et progression, produit un `Artifact`, puis notifie la fin (statut + raison d'arrêt).
 4. Un **kill switch** dans l'UI arrête un run en cours ; un worker qui crashe laisse le run repris automatiquement (verrou périmé).
+
+## Moteur « agent CLI » — faire écrire du code
+
+Un run autonome choisit son **moteur** :
+
+- **`llm`** (défaut, historique) — le routeur appelle un modèle qui produit des
+  données conformes à un schéma Zod. Il ne touche à aucun fichier.
+- **`cli`** — le worker lance un **agent de code** (`claude`, `gemini`,
+  `opencode`) dans un **clone du dépôt du projet**. L'agent boucle avec ses
+  propres outils et **modifie réellement les fichiers**.
+
+Le moteur `cli` **rompt délibérément l'invariant** « le modèle ne produit jamais
+de code exécutable » qui tient partout ailleurs dans l'app. Le confinement
+repose sur quatre choses, et **ce n'est pas une sandbox** — l'agent a les droits
+de l'utilisateur du worker :
+
+- un workspace par projet (`.workspaces/<projectId>`, cf. `WORKSPACES_DIR`),
+  **toujours un dépôt git à sa racine** — sinon git remonterait jusqu'au dépôt
+  de l'orchestrateur et l'agent piloterait le code de l'app ;
+- les modes de permission du CLI (`acceptEdits` / `auto_edit`), jamais
+  `--dangerously-skip-permissions` ni `--yolo` ;
+- **aucun commit, aucun push** : l'agent modifie l'arbre de travail, le diff est
+  résumé dans l'`Artifact` et c'est toi qui relis ;
+- timeout, plafond d'itérations et **kill switch effectif pendant l'invocation**
+  (le run est relu toutes les 2 s ; à l'arrêt, tout le groupe de processus est
+  tué, pas seulement le fils).
+
+**Prérequis** : le CLI doit être installé **et connecté** sur la machine du
+worker. Il utilise son propre login (abonnement) : aucune clé de l'app ne lui
+est transmise — l'environnement est filtré par une allowlist, précisément pour
+qu'une `ANTHROPIC_API_KEY` traînant dans le `.env` ne fasse pas basculer Claude
+Code sur la facturation à la clé.
+
+État constaté des trois agents (machine de dev, 2026-07-16) :
+
+| CLI | État | Coût remonté |
+|---|---|---|
+| `claude` | vérifié de bout en bout | **oui** (`total_cost_usd`) |
+| `opencode` | vérifié ; exige `OPENCODE_CLI_MODEL` (sans modèle explicite, il ne rend jamais la main) | oui (0 sur les modèles gratuits) |
+| `gemini` | **indisponible** : Google a retiré Code Assist « individuals » à ce client (`IneligibleTierError`). Code écrit et testé sur fixtures, non vérifié en réel. | non |
+
+Un CLI qui ne remonte pas de coût rend le **plafond de coût du run aveugle** :
+seuls les itérations et le timeout le bornent. L'UI le dit au moment du choix.
 
 ## État & suites possibles
 

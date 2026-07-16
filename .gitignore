@@ -26,3 +26,6 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
+
+# workspaces des agents CLI (clones des dépôts des projets, cf. lib/workspace.ts)
+/.workspaces/

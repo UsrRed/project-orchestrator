@@ -10,16 +10,33 @@ import "server-only";
 import { desc, eq, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
+import type { CliExecProvider } from "@/lib/cli-agents";
 import type { Provider, Tier } from "@/lib/models";
 import { logWarn } from "@/lib/observability";
 import { agentExecutions } from "@/drizzle/schema";
 
+/**
+ * Provider journalisable : un provider LLM du routeur, ou un agent CLI.
+ *
+ * Le type `Provider` reste volontairement limité aux providers LLM : y ajouter
+ * les CLI casserait le `switch` exhaustif de `buildModel`
+ * ([llm-router.ts](llm-router.ts)) — le routeur n'a rien à faire d'un CLI.
+ */
+export type ExecProvider = Provider | CliExecProvider;
+
+/**
+ * Tier journalisé. `"cli"` n'est pas un tier du routeur : un agent CLI choisit
+ * son propre modèle, l'app ne le route pas. Le noter `fast` ou `frontier`
+ * laisserait croire à un arbitrage qui n'a pas eu lieu.
+ */
+export type ExecTier = Tier | "cli";
+
 export interface RecordExecutionInput {
   userId: string;
   taskLabel: string;
-  provider: Provider;
+  provider: ExecProvider;
   model: string;
-  tier: Tier;
+  tier: ExecTier;
   status: "succeeded" | "failed";
   promptTokens: number;
   completionTokens: number;

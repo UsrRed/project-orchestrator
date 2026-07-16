@@ -1,6 +1,17 @@
+import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { join } from "node:path";
+
 import { beforeEach, describe, expect, it } from "vitest";
 
+import {
+  CLI_AGENTS,
+  OPENCODE_CLI_MODEL,
+  cliAgentInfo,
+  isCliAgentId,
+} from "@/lib/cli-agents";
 import { decrypt, encrypt, maskSecret } from "@/lib/crypto";
+import { buildEnv, runProcess } from "@/lib/process";
+import { workspacePathFor } from "@/lib/workspace";
 import {
   resetBreakers,
   runWithFallback,
@@ -324,5 +335,397 @@ describe("panneau adaptatif", () => {
     expect(panelKeyFor("marketing digital")).toBe("marketing");
     expect(panelKeyFor(null)).toBe("default");
     expect(panelKeyFor("inconnu")).toBe("default");
+  });
+});
+
+// --- Moteur CLI (agents de code) -----------------------------------------
+
+/**
+ * Sorties réelles capturées sur les binaires installés (sondes du 2026-07-16),
+ * volontairement pas reconstituées à la main : c'est ce qui donne leur valeur à
+ * ces tests — un changement de format des CLI doit les faire échouer.
+ */
+const CLAUDE_JSON = JSON.stringify({
+  type: "result",
+  subtype: "success",
+  is_error: false,
+  duration_ms: 7768,
+  num_turns: 1,
+  result: "OK",
+  session_id: "5366007b-2a07-4e00-b9bc-9614b696ad3c",
+  total_cost_usd: 0.172316,
+  usage: { input_tokens: 2, output_tokens: 21 },
+});
+
+const OPENCODE_NDJSON = [
+  JSON.stringify({
+    type: "step_start",
+    sessionID: "ses_09451e019ffeWIMeX56l6hpHGa",
+    part: { type: "step-start" },
+  }),
+  JSON.stringify({
+    type: "text",
+    sessionID: "ses_09451e019ffeWIMeX56l6hpHGa",
+    part: { type: "text", text: "Got it." },
+  }),
+  JSON.stringify({
+    type: "step_finish",
+    sessionID: "ses_09451e019ffeWIMeX56l6hpHGa",
+    part: {
+      type: "step-finish",
+      reason: "stop",
+      tokens: { input: 20, output: 13 },
+      cost: 0.0042,
+    },
+  }),
+].join("\n");
+
+const GEMINI_JSON = JSON.stringify({
+  response: "OK",
+  stats: { models: {} },
+});
+
+describe("registre des agents CLI", () => {
+  it("expose claude, gemini et opencode", () => {
+    expect(CLI_AGENTS.map((c) => c.id)).toEqual([
+      "claude",
+      "gemini",
+      "opencode",
+    ]);
+    expect(isCliAgentId("claude")).toBe(true);
+    expect(isCliAgentId("cursor")).toBe(false);
+    expect(cliAgentInfo("inconnu")).toBeUndefined();
+  });
+
+  it("claude : impose la session au 1er appel, la reprend ensuite", () => {
+    const claude = cliAgentInfo("claude")!;
+    const first = claude.buildArgs("fais X", { runId: "run-uuid" });
+    expect(first).toContain("-p");
+    expect(first).toContain("fais X");
+    expect(first.join(" ")).toContain("--session-id run-uuid");
+    expect(first.join(" ")).toContain("--output-format json");
+    // Le mode permissif intégral ne doit jamais être demandé.
+    expect(first).not.toContain("--dangerously-skip-permissions");
+    expect(first.join(" ")).toContain("--permission-mode acceptEdits");
+
+    const next = claude.buildArgs("continue", {
+      runId: "run-uuid",
+      resumeSessionId: "sess-abc",
+    });
+    expect(next.join(" ")).toContain("--resume sess-abc");
+    expect(next.join(" ")).not.toContain("--session-id");
+  });
+
+  it("gemini : --skip-trust obligatoire, reprise par « latest »", () => {
+    const gemini = cliAgentInfo("gemini")!;
+    // Un workspace fraîchement cloné n'est jamais « trusted » : sans ce flag le
+    // CLI refuse de démarrer en headless.
+    expect(gemini.buildArgs("x", { runId: "r" })).toContain("--skip-trust");
+    // `--resume` de gemini ne prend pas d'id de session, mais "latest".
+    const next = gemini.buildArgs("x", { runId: "r", resumeSessionId: "s1" });
+    expect(next.join(" ")).toContain("--resume latest");
+  });
+
+  it("opencode : ne reprend une session que si on lui en donne une", () => {
+    const oc = cliAgentInfo("opencode")!;
+    const first = oc.buildArgs("fais X", { runId: "r" });
+    expect(first[0]).toBe("run");
+    expect(first).not.toContain("--session");
+    expect(first.at(-1)).toBe("fais X");
+
+    const next = oc.buildArgs("fais X", { runId: "r", resumeSessionId: "ses_1" });
+    expect(next.join(" ")).toContain("--session ses_1");
+  });
+
+  it("opencode : impose toujours un modèle", () => {
+    // Régression : sans `-m`, `opencode run` ne rend jamais la main (0 octet
+    // jusqu'au timeout) — le run échouerait en « timeout » sans rien produire.
+    const oc = cliAgentInfo("opencode")!;
+    expect(oc.buildArgs("x", { runId: "r" }).join(" ")).toContain(
+      `-m ${OPENCODE_CLI_MODEL}`,
+    );
+    expect(
+      oc.buildArgs("x", { runId: "r", resumeSessionId: "ses_1" }),
+    ).toContain("-m");
+  });
+
+  it("claude : extrait texte, coût réel et session", () => {
+    const out = cliAgentInfo("claude")!.parseOutcome(CLAUDE_JSON);
+    expect(out.text).toBe("OK");
+    expect(out.costUsd).toBeCloseTo(0.172316, 6);
+    expect(out.sessionId).toBe("5366007b-2a07-4e00-b9bc-9614b696ad3c");
+  });
+
+  it("opencode : concatène le texte et somme le coût du flux NDJSON", () => {
+    const out = cliAgentInfo("opencode")!.parseOutcome(OPENCODE_NDJSON);
+    expect(out.text).toBe("Got it.");
+    expect(out.costUsd).toBeCloseTo(0.0042, 6);
+    expect(out.sessionId).toBe("ses_09451e019ffeWIMeX56l6hpHGa");
+  });
+
+  it("gemini : extrait la réponse, sans coût (il n'en remonte aucun)", () => {
+    const out = cliAgentInfo("gemini")!.parseOutcome(GEMINI_JSON);
+    expect(out.text).toBe("OK");
+    expect(out.costUsd).toBe(0);
+    expect(cliAgentInfo("gemini")!.reportsCost).toBe(false);
+  });
+
+  it("parse : dégrade sans jeter sur une sortie illisible ou tronquée", () => {
+    for (const cli of CLI_AGENTS) {
+      // Un run par ailleurs réussi ne doit jamais être perdu sur un détail de
+      // format : on rend le stdout brut plutôt que de lever.
+      expect(cli.parseOutcome("texte libre, pas du JSON").text).toBe(
+        "texte libre, pas du JSON",
+      );
+      expect(cli.parseOutcome("").costUsd).toBe(0);
+      expect(() => cli.parseOutcome('{"result": tronq')).not.toThrow();
+    }
+  });
+
+  it("claude : ignore les lignes parasites avant le JSON", () => {
+    const noisy = `Avertissement: mise à jour disponible\n${CLAUDE_JSON}`;
+    expect(cliAgentInfo("claude")!.parseOutcome(noisy).text).toBe("OK");
+  });
+
+  it("sortie comprise mais sans message final : ne recrache pas le flux brut", () => {
+    // Un agent peut n'utiliser que des outils et s'arrêter sans conclure. Le
+    // fil de la tâche ne doit pas recevoir 4 Ko d'événements machine pour
+    // autant : le coût et la session restent lus, le texte est explicite.
+    const noText = [
+      JSON.stringify({
+        type: "step_start",
+        sessionID: "ses_x",
+        part: { type: "step-start" },
+      }),
+      JSON.stringify({
+        type: "step_finish",
+        sessionID: "ses_x",
+        part: { type: "step-finish", cost: 0.5 },
+      }),
+    ].join("\n");
+
+    const out = cliAgentInfo("opencode")!.parseOutcome(noText);
+    expect(out.text).not.toContain("step_finish");
+    expect(out.text).toContain("pas renvoyé de message final");
+    expect(out.costUsd).toBeCloseTo(0.5, 6);
+    expect(out.sessionId).toBe("ses_x");
+
+    // Idem pour claude : JSON valide, `result` absent.
+    const claudeNoResult = cliAgentInfo("claude")!.parseOutcome(
+      JSON.stringify({ type: "result", total_cost_usd: 0.1 }),
+    );
+    expect(claudeNoResult.text).toContain("pas renvoyé de message final");
+    expect(claudeNoResult.costUsd).toBeCloseTo(0.1, 6);
+  });
+});
+
+describe("workspaces", () => {
+  it("n'accepte que des UUID (pas d'échappement de la racine)", () => {
+    const uuid = "5366007b-2a07-4e00-b9bc-9614b696ad3c";
+    expect(workspacePathFor(uuid).endsWith(uuid)).toBe(true);
+    for (const bad of ["../../etc", "/etc/passwd", "", "abc"]) {
+      expect(() => workspacePathFor(bad)).toThrow();
+    }
+  });
+
+  it("un dossier nu sous .workspaces/ appartient au dépôt de l'app", async () => {
+    // Régression : c'est précisément ce qui s'est produit. Un workspace sans
+    // dépôt propre laisse git remonter jusqu'au dépôt de l'orchestrateur —
+    // l'agent croit travailler chez l'utilisateur et pilote le code de l'app.
+    // `ensureWorkspace` fait donc un `git init` et vérifie la racine.
+    const nu = await mkdtemp(join(process.cwd(), ".workspace-test-"));
+    try {
+      const top = await runProcess({
+        bin: "git",
+        args: ["rev-parse", "--show-toplevel"],
+        cwd: nu,
+        timeoutMs: 10_000,
+      });
+      expect(top.stdout.trim()).toBe(process.cwd());
+
+      // Avec un dépôt à sa racine, la frontière devient opaque au parent.
+      await runProcess({ bin: "git", args: ["init", "-q"], cwd: nu, timeoutMs: 10_000 });
+      const after = await runProcess({
+        bin: "git",
+        args: ["rev-parse", "--show-toplevel"],
+        cwd: nu,
+        timeoutMs: 10_000,
+      });
+      expect(await realpath(after.stdout.trim())).toBe(await realpath(nu));
+    } finally {
+      await rm(nu, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("environnement des agents CLI", () => {
+  it("n'expose aucune clé LLM du worker", () => {
+    // Enjeu réel : une ANTHROPIC_API_KEY transmise ferait basculer Claude Code
+    // sur la facturation à la clé au lieu de l'abonnement de l'utilisateur.
+    const env = buildEnv(
+      {},
+      {
+        PATH: "/usr/bin",
+        HOME: "/home/u",
+        ANTHROPIC_API_KEY: "sk-secret",
+        GEMINI_API_KEY: "g-secret",
+        OPENAI_API_KEY: "o-secret",
+        DATABASE_URL: "postgres://…",
+        ENCRYPTION_MASTER_KEY: "master",
+        XDG_CONFIG_HOME: "/home/u/.config",
+      },
+    );
+
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.HOME).toBe("/home/u");
+    // Les CLI lisent leur login dans XDG_CONFIG_HOME : indispensable.
+    expect(env.XDG_CONFIG_HOME).toBe("/home/u/.config");
+    for (const leaked of [
+      "ANTHROPIC_API_KEY",
+      "GEMINI_API_KEY",
+      "OPENAI_API_KEY",
+      "DATABASE_URL",
+      "ENCRYPTION_MASTER_KEY",
+    ]) {
+      expect(env[leaked]).toBeUndefined();
+    }
+  });
+
+  it("laisse passer les surcharges explicites", () => {
+    const env = buildEnv({ FOO: "bar" }, { PATH: "/usr/bin" });
+    expect(env.FOO).toBe("bar");
+  });
+});
+
+describe("runProcess", () => {
+  const cwd = process.cwd();
+
+  it("capture stdout et le code de sortie", async () => {
+    const r = await runProcess({
+      bin: process.execPath,
+      args: ["-e", "console.log('hello'); process.exit(0)"],
+      cwd,
+      timeoutMs: 10_000,
+    });
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toBe("hello");
+    expect(r.timedOut).toBe(false);
+  });
+
+  it("bout en bout : sortie d'un faux claude → CliOutcome", async () => {
+    const r = await runProcess({
+      bin: process.execPath,
+      args: ["-e", `console.log(${JSON.stringify(CLAUDE_JSON)})`],
+      cwd,
+      timeoutMs: 10_000,
+    });
+    const out = cliAgentInfo("claude")!.parseOutcome(r.stdout);
+    expect(out.text).toBe("OK");
+    expect(out.costUsd).toBeCloseTo(0.172316, 6);
+  });
+
+  it("remonte un code de sortie non nul comme résultat, pas comme exception", async () => {
+    const r = await runProcess({
+      bin: process.execPath,
+      args: ["-e", "console.error('boom'); process.exit(3)"],
+      cwd,
+      timeoutMs: 10_000,
+    });
+    expect(r.code).toBe(3);
+    expect(r.stderr.trim()).toBe("boom");
+  });
+
+  it("jette un message lisible si le binaire n'existe pas", async () => {
+    await expect(
+      runProcess({
+        bin: "binaire-qui-nexiste-pas-xyz",
+        args: [],
+        cwd,
+        timeoutMs: 5_000,
+      }),
+    ).rejects.toThrow(/introuvable/);
+  });
+
+  it("tue vraiment le processus au timeout", async () => {
+    const r = await runProcess({
+      bin: process.execPath,
+      args: ["-e", "setInterval(() => {}, 1e9)"],
+      cwd,
+      timeoutMs: 700,
+    });
+    expect(r.timedOut).toBe(true);
+    // Le drapeau ne suffit pas : le processus doit être réellement mort,
+    // sinon un run « arrêté » continuerait de tourner sur la machine.
+    expect(r.code === null || r.code !== 0).toBe(true);
+  });
+
+  it("tue le processus sur annulation (kill switch)", async () => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 200);
+    const r = await runProcess({
+      bin: process.execPath,
+      args: ["-e", "setInterval(() => {}, 1e9)"],
+      cwd,
+      timeoutMs: 30_000,
+      signal: controller.signal,
+    });
+    expect(r.aborted).toBe(true);
+    expect(r.timedOut).toBe(false);
+  });
+
+  it("tue toute la descendance, pas seulement le fils", async () => {
+    // Un agent CLI lance des sous-process (git, tests, node) : les laisser
+    // survivre à un kill switch serait une fuite silencieuse.
+    const script = `
+      const { spawn } = require("node:child_process");
+      const child = spawn(process.execPath, ["-e", "setInterval(()=>{},1e9)"], { stdio: "ignore" });
+      console.log(child.pid);
+      setInterval(() => {}, 1e9);
+    `;
+    const controller = new AbortController();
+    const p = runProcess({
+      bin: process.execPath,
+      args: ["-e", script],
+      cwd,
+      timeoutMs: 30_000,
+      signal: controller.signal,
+    });
+    await new Promise((r) => setTimeout(r, 800));
+    controller.abort();
+    const r = await p;
+
+    const grandchildPid = Number(r.stdout.trim());
+    expect(Number.isInteger(grandchildPid)).toBe(true);
+    await new Promise((r) => setTimeout(r, 500));
+    // kill(pid, 0) ne tue rien : il teste l'existence du processus.
+    expect(() => process.kill(grandchildPid, 0)).toThrow();
+  });
+
+  it("tronque une sortie qui dépasse le plafond", async () => {
+    const r = await runProcess({
+      bin: process.execPath,
+      args: ["-e", "console.log('x'.repeat(50_000))"],
+      cwd,
+      timeoutMs: 10_000,
+      maxOutputBytes: 1_000,
+    });
+    expect(r.truncated).toBe(true);
+    expect(r.stdout.length).toBeLessThanOrEqual(1_000);
+  });
+
+  it("n'attend pas sur stdin", async () => {
+    // Régression : `opencode run` reste bloqué tant que stdin est ouvert et ne
+    // rend jamais la main (constaté : 0 octet jusqu'au timeout).
+    const r = await runProcess({
+      bin: process.execPath,
+      args: [
+        "-e",
+        "process.stdin.on('data', () => {}); console.log('pas bloqué');",
+      ],
+      cwd,
+      timeoutMs: 5_000,
+    });
+    expect(r.timedOut).toBe(false);
+    expect(r.stdout.trim()).toBe("pas bloqué");
   });
 });

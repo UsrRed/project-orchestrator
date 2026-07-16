@@ -1,12 +1,13 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 
 import {
   killRunAction,
   startRunAction,
   type RunFormState,
 } from "@/app/tasks/[taskId]/actions";
+import type { CliAgentStatus } from "@/lib/cli-availability";
 import type { RunRow } from "@/lib/runs";
 
 const INITIAL: RunFormState = { ok: false, message: "" };
@@ -22,6 +23,7 @@ const STATUS_STYLE: Record<string, string> = {
 const STOP_LABEL: Record<string, string> = {
   completed: "objectif atteint",
   budget: "plafond de coût atteint",
+  project_budget: "budget du projet dépassé",
   iterations: "max d'itérations atteint",
   timeout: "timeout",
   killed: "arrêté (kill switch)",
@@ -31,11 +33,18 @@ const STOP_LABEL: Record<string, string> = {
 export function AutonomousPanel({
   taskId,
   runs,
+  cliAgents,
 }: {
   taskId: string;
   runs: RunRow[];
+  /** Agents CLI détectés sur la machine (cf. lib/cli-availability.ts). */
+  cliAgents: CliAgentStatus[];
 }) {
   const [state, formAction, pending] = useActionState(startRunAction, INITIAL);
+  const [engine, setEngine] = useState("llm");
+
+  const isCli = engine !== "llm";
+  const selected = cliAgents.find((c) => c.id === engine);
 
   return (
     <div className="flex flex-col gap-4">
@@ -52,15 +61,60 @@ export function AutonomousPanel({
           />
         </label>
 
+        <label className="flex flex-col gap-1 text-sm">
+          <span className="text-neutral-400">Moteur d&apos;exécution</span>
+          <select
+            name="engine"
+            value={engine}
+            onChange={(e) => setEngine(e.target.value)}
+            className="rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-neutral-100 outline-none focus:border-emerald-500"
+          >
+            <option value="llm">LLM (routeur) — produit du texte</option>
+            {cliAgents.map((c) => (
+              <option key={c.id} value={c.id} disabled={!c.available}>
+                {c.label}
+                {c.available ? " — écrit du code" : " — indisponible"}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        {isCli && (
+          <p className="rounded-lg border border-amber-900 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
+            L&apos;agent <code>{engine}</code> s&apos;exécute sur la machine du
+            worker, dans le workspace du projet : il{" "}
+            <strong>modifie réellement les fichiers</strong> (sans commiter ni
+            pousser — tu reliras le diff). Il utilise son propre login, aucune
+            clé API de l&apos;app.
+            {selected && !selected.reportsCost && (
+              <>
+                {" "}
+                Il ne remonte aucun coût :{" "}
+                <strong>le plafond ci-dessous ne le limitera pas</strong> —
+                seuls les itérations et le timeout le borneront.
+              </>
+            )}
+          </p>
+        )}
+
+        {selected?.warning && !selected.available && (
+          <p className="rounded-lg border border-red-900 bg-red-950/20 px-3 py-2 text-xs text-red-200">
+            {selected.warning}
+          </p>
+        )}
+
         <div className="grid grid-cols-3 gap-3">
           <label className="flex flex-col gap-1 text-xs text-neutral-500">
             Max itérations
             <input
+              // Remonté à chaque changement de moteur pour reprendre le défaut :
+              // un agent CLI boucle déjà en interne, une invocation suffit.
+              key={isCli ? "cli" : "llm"}
               name="maxIterations"
               type="number"
               min={1}
               max={20}
-              defaultValue={5}
+              defaultValue={isCli ? 1 : 5}
               className="rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-sm text-neutral-100 outline-none focus:border-emerald-500"
             />
           </label>
@@ -78,11 +132,14 @@ export function AutonomousPanel({
           <label className="flex flex-col gap-1 text-xs text-neutral-500">
             Timeout (min)
             <input
+              // Un agent CLI travaille en minutes, pas en secondes : 10 min
+              // suffisent au moteur `llm` mais couperaient souvent un run CLI.
+              key={isCli ? "cli" : "llm"}
               name="timeoutMin"
               type="number"
               min={1}
               max={120}
-              defaultValue={10}
+              defaultValue={isCli ? 30 : 10}
               className="rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-sm text-neutral-100 outline-none focus:border-emerald-500"
             />
           </label>
@@ -124,6 +181,9 @@ export function AutonomousPanel({
                   }`}
                 >
                   {r.status}
+                </span>
+                <span className="rounded bg-neutral-800 px-1.5 py-0.5 font-mono text-[10px] text-neutral-400">
+                  {r.engine === "cli" ? r.engineCli : "llm"}
                 </span>
                 <span className="flex-1 truncate text-neutral-300">
                   {r.goal}
