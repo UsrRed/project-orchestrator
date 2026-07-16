@@ -5,8 +5,11 @@ import { redirect } from "next/navigation";
 
 import {
   generateArchitecture,
+  refineArchitecture,
+  type Architecture,
   type ProjectType,
 } from "@/lib/architect";
+import { assertWithinBudget } from "@/lib/budgets";
 import { getProviderConnections } from "@/lib/keys";
 import { recordExecution } from "@/lib/executions";
 import {
@@ -16,6 +19,7 @@ import {
 } from "@/lib/normes";
 import { setBudget } from "@/lib/budgets";
 import { captureException } from "@/lib/observability";
+import { getProfile, profilePreamble } from "@/lib/profile";
 import { getCurrentUserId } from "@/lib/users";
 import {
   addPhase,
@@ -24,7 +28,9 @@ import {
   deletePhase,
   deleteProject,
   deleteTask,
+  getProjectTree,
   renameProject,
+  replaceProjectTree,
   updatePhase,
   updateTask,
   type PhaseStatus,
@@ -68,10 +74,16 @@ export async function generateProjectAction(
     };
   }
 
+  const profile = await getProfile(userId);
   let projectId: string;
   const startedAt = new Date();
   try {
-    const result = await generateArchitecture(idea, type, keys);
+    const result = await generateArchitecture(
+      idea,
+      type,
+      keys,
+      profilePreamble(profile),
+    );
     projectId = await createProjectFromArchitecture(
       userId,
       idea,
@@ -80,6 +92,10 @@ export async function generateProjectAction(
     );
     // Auto-association des normes dont la catégorie ↔ type de phase (M5).
     await autoAssociateProjectNorms(userId, projectId);
+    // Budget par défaut du profil, si défini.
+    if (profile.defaultBudgetUsd && profile.defaultBudgetUsd > 0) {
+      await setBudget(userId, projectId, profile.defaultBudgetUsd);
+    }
     await recordExecution({
       userId,
       taskLabel: `[architecture] ${result.architecture.projectName}`,
@@ -107,6 +123,85 @@ export async function generateProjectAction(
 
   revalidatePath("/projects");
   redirect(`/projects/${projectId}`);
+}
+
+// --- Raffinement de l'arborescence ---------------------------------------
+
+export async function refineProjectAction(
+  _prev: GenerateState,
+  formData: FormData,
+): Promise<GenerateState> {
+  const projectId = String(formData.get("projectId") ?? "");
+  const constraint = String(formData.get("constraint") ?? "").trim();
+  if (!projectId) return { ok: false, message: "Projet manquant." };
+  if (!constraint) return { ok: false, message: "Décris la contrainte / le changement." };
+
+  const userId = await getCurrentUserId();
+  const tree = await getProjectTree(userId, projectId);
+  if (!tree) return { ok: false, message: "Projet introuvable." };
+
+  const keys = await getProviderConnections(userId);
+  if (Object.keys(keys).length === 0) {
+    return { ok: false, message: "Aucune connexion LLM. Ajoute-en une sur l'accueil." };
+  }
+  try {
+    await assertWithinBudget(projectId);
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "Budget dépassé." };
+  }
+
+  const current: Architecture = {
+    projectName: tree.name,
+    summary: tree.idea ?? "",
+    phases: tree.phases.map((ph) => ({
+      name: ph.name,
+      type: ph.type ?? "",
+      tasks: ph.tasks.map((t) => ({
+        title: t.title,
+        description: t.description ?? "",
+        mode: t.mode,
+        priority: t.priority,
+      })),
+    })),
+  };
+
+  const profile = await getProfile(userId);
+  const startedAt = new Date();
+  try {
+    const result = await refineArchitecture(
+      tree.idea ?? tree.name,
+      tree.type as ProjectType,
+      current,
+      constraint,
+      keys,
+      profilePreamble(profile),
+    );
+    await replaceProjectTree(userId, projectId, result.architecture);
+    await autoAssociateProjectNorms(userId, projectId);
+    await recordExecution({
+      userId,
+      taskLabel: `[raffinement] ${result.architecture.projectName}`,
+      projectId,
+      provider: result.spec.provider,
+      model: result.spec.modelId,
+      tier: "frontier",
+      status: "succeeded",
+      promptTokens: result.promptTokens,
+      completionTokens: result.completionTokens,
+      costUsd: result.costUsd,
+      startedAt,
+      finishedAt: new Date(),
+    });
+  } catch (err) {
+    await captureException(err, "architect.refine_failed", { userId, projectId });
+    return {
+      ok: false,
+      message: err instanceof Error ? `Échec du raffinement : ${err.message}` : "Échec.",
+    };
+  }
+
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true, message: "Arborescence révisée." };
 }
 
 // --- Édition (form actions simples) -------------------------------------

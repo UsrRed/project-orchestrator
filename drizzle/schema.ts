@@ -353,6 +353,26 @@ export const budgets = pgTable("budgets", {
 });
 
 /**
+ * Profil / préférences de l'utilisateur (une ligne par compte). Personnalise
+ * le comportement de l'IA (langue, ton, type de projet par défaut) et fournit
+ * des valeurs par défaut (budget, provider préféré).
+ */
+export const profiles = pgTable("profiles", {
+  userId: uuid("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  displayName: text("display_name"),
+  language: text("language").notNull().default("fr"),
+  tone: text("tone").notNull().default("neutre et professionnel"),
+  defaultProjectType: projectTypeEnum("default_project_type")
+    .notNull()
+    .default("tech"),
+  preferredProvider: providerEnum("preferred_provider"),
+  defaultBudgetUsd: numeric("default_budget_usd", { precision: 12, scale: 4 }),
+  ...timestamps,
+});
+
+/**
  * Runs du mode Autonome — sert AUSSI de queue durable : les lignes `queued`
  * sont réclamées par le worker (`FOR UPDATE SKIP LOCKED`), les `running`
  * peuvent être reprises après un crash. Garde-fous vérifiés à chaque itération :

@@ -20,8 +20,14 @@ import {
   getProjectTree,
   listProjects,
   renameProject,
+  replaceProjectTree,
   updateTask,
 } from "@/lib/projects";
+import {
+  getProfile,
+  profilePreamble,
+  upsertProfile,
+} from "@/lib/profile";
 import {
   addMessage,
   getCoworkStatus,
@@ -56,7 +62,7 @@ const OTHER = "00000000-0000-0000-0000-000000000000";
 
 async function reset() {
   await db.execute(
-    sql`TRUNCATE projects, normes, api_keys, agent_executions, autonomous_runs, oauth_config RESTART IDENTITY CASCADE`,
+    sql`TRUNCATE projects, normes, api_keys, agent_executions, autonomous_runs, oauth_config, profiles RESTART IDENTITY CASCADE`,
   );
 }
 
@@ -257,6 +263,53 @@ describe("budgets & exécutions", () => {
     const h = await executionHealth(userId);
     expect(h.failed).toBe(1);
     expect((await listFailedExecutions(userId))).toHaveLength(1);
+  });
+});
+
+describe("profil utilisateur", () => {
+  it("défauts, upsert, préambule", async () => {
+    const def = await getProfile(userId);
+    expect(def.language).toBe("fr");
+    expect(def.defaultProjectType).toBe("tech");
+    expect(def.defaultBudgetUsd).toBeNull();
+
+    await upsertProfile(userId, {
+      displayName: "Alice",
+      language: "en",
+      tone: "direct",
+      defaultProjectType: "marketing",
+      defaultBudgetUsd: 12.5,
+    });
+    const p = await getProfile(userId);
+    expect(p.displayName).toBe("Alice");
+    expect(p.language).toBe("en");
+    expect(p.defaultProjectType).toBe("marketing");
+    expect(p.defaultBudgetUsd).toBe(12.5);
+    expect(profilePreamble(p)).toContain("anglais");
+    expect(profilePreamble(p)).toContain("direct");
+  });
+});
+
+describe("raffinement d'arborescence", () => {
+  it("replaceProjectTree remplace phases & tâches", async () => {
+    const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
+    expect((await getProjectTree(userId, pid))?.phases).toHaveLength(2);
+
+    await replaceProjectTree(userId, pid, {
+      projectName: "Révisé",
+      summary: "s",
+      phases: [
+        {
+          name: "Sécurité",
+          type: "securite",
+          tasks: [{ title: "Audit", description: "d", mode: "manual", priority: 1 }],
+        },
+      ],
+    });
+    const tree = await getProjectTree(userId, pid);
+    expect(tree?.name).toBe("Révisé");
+    expect(tree?.phases).toHaveLength(1);
+    expect(tree?.phases[0]!.name).toBe("Sécurité");
   });
 });
 

@@ -126,6 +126,12 @@ Logs **structurés** (JSON : level/event/contexte) via [lib/observability.ts](li
 
 Chaque exécution LLM est rattachée à son projet (`agent_executions.project_id`). Sur la page projet, un **budget** (`limitUsd`) peut être fixé : le montant dépensé est calculé en direct depuis la table de vérité, avec **alerte à 80 %** et **blocage à 100 %** — les appels IA (chat, Cowork, widget) et le **lancement de runs autonomes** sont refusés au dépassement, et un run en cours s'arrête avec la raison `project_budget`. Service : [lib/budgets.ts](lib/budgets.ts).
 
+## Profils & navigation
+
+- **Profil** (`/profile`) — préférences par compte ([lib/profile.ts](lib/profile.ts)) : langue et **ton** des réponses IA, **type de projet** et **budget** par défaut, provider préféré. La langue/le ton sont injectés en préambule de l'**agent architecte** ; le budget par défaut est appliqué aux nouveaux projets.
+- **Navigation partagée** ([components/top-nav.tsx](components/top-nav.tsx)) — barre en tête de toutes les pages (Projets / Normes / Modèles / Santé / Profil + compte).
+- **Raffinement de l'architecte** — sur la page projet, « Affiner l'arborescence » régénère phases et tâches selon une **contrainte** ([lib/architect.ts](lib/architect.ts) `refineArchitecture`). Une **barre de progression** (tâches terminées) figure sur `/projects` et la page projet.
+
 ## Authentification (M7.2)
 
 Auth.js v5 + **GitHub OAuth** (adapter Drizzle) : config Edge-safe ([auth.config.ts](auth.config.ts)) + config Node avec adapter ([auth.ts](auth.ts)), middleware de protection ([middleware.ts](middleware.ts)), page `/signin`. Tout le code étant scopé par `userId`, seul `getCurrentUserId()` ([lib/users.ts](lib/users.ts)) lit la session.

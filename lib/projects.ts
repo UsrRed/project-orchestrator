@@ -65,6 +65,51 @@ export async function createProjectFromArchitecture(
   });
 }
 
+/**
+ * Remplace l'arborescence d'un projet existant par une nouvelle (raffinement).
+ * Supprime les phases actuelles (et leurs tâches/messages/artefacts en cascade)
+ * puis recrée depuis `arch`. Met à jour le nom du projet.
+ */
+export async function replaceProjectTree(
+  userId: string,
+  projectId: string,
+  arch: Architecture,
+): Promise<void> {
+  const [owned] = await db
+    .select({ id: projects.id })
+    .from(projects)
+    .where(and(eq(projects.id, projectId), eq(projects.userId, userId)))
+    .limit(1);
+  if (!owned) throw new Error("Projet introuvable ou non autorisé.");
+
+  await db.transaction(async (tx) => {
+    await tx.delete(phases).where(eq(phases.projectId, projectId));
+    for (let p = 0; p < arch.phases.length; p++) {
+      const phase = arch.phases[p]!;
+      const [phaseRow] = await tx
+        .insert(phases)
+        .values({ projectId, name: phase.name, type: phase.type, order: p })
+        .returning({ id: phases.id });
+      if (!phaseRow) throw new Error("Échec de recréation d'une phase.");
+      if (phase.tasks.length > 0) {
+        await tx.insert(tasks).values(
+          phase.tasks.map((t) => ({
+            phaseId: phaseRow.id,
+            title: t.title,
+            description: t.description,
+            mode: t.mode,
+            priority: t.priority,
+          })),
+        );
+      }
+    }
+    await tx
+      .update(projects)
+      .set({ name: arch.projectName })
+      .where(eq(projects.id, projectId));
+  });
+}
+
 // --- Lecture -------------------------------------------------------------
 
 export interface ProjectSummary {
@@ -74,6 +119,7 @@ export interface ProjectSummary {
   idea: string | null;
   phaseCount: number;
   taskCount: number;
+  doneTaskCount: number;
   createdAt: Date;
 }
 
@@ -87,6 +133,7 @@ export async function listProjects(userId: string): Promise<ProjectSummary[]> {
       createdAt: projects.createdAt,
       phaseCount: sql<number>`count(distinct ${phases.id})::int`,
       taskCount: sql<number>`count(${tasks.id})::int`,
+      doneTaskCount: sql<number>`count(${tasks.id}) filter (where ${tasks.status} = 'done')::int`,
     })
     .from(projects)
     .leftJoin(phases, eq(phases.projectId, projects.id))

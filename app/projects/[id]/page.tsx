@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 
 import { AutoSubmitSelect } from "@/components/auto-submit-select";
 import { BudgetPanel } from "@/components/budget-panel";
+import { RefineForm } from "@/components/refine-form";
 import { getProjectTree } from "@/lib/projects";
 import { getBudgetStatus } from "@/lib/budgets";
 import { listNormesForProject, listPhaseNormes } from "@/lib/normes";
@@ -108,6 +109,33 @@ export default async function ProjectDetailPage({
       </div>
 
       <BudgetPanel projectId={project.id} status={budget} />
+
+      {(() => {
+        const all = project.phases.flatMap((p) => p.tasks);
+        const done = all.filter((t) => t.status === "done").length;
+        const pct = all.length > 0 ? Math.round((done / all.length) * 100) : 0;
+        return (
+          <div className="flex items-center gap-3 text-xs text-neutral-500">
+            <span>Progression</span>
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-neutral-800">
+              <div
+                className="h-full bg-emerald-500 transition-all"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            <span className="text-neutral-400">
+              {done}/{all.length} · {pct}%
+            </span>
+          </div>
+        );
+      })()}
+
+      <section className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-4">
+        <h2 className="mb-2 text-sm font-semibold text-neutral-200">
+          Affiner avec l&apos;architecte
+        </h2>
+        <RefineForm projectId={project.id} />
+      </section>
 
       <div className="flex flex-col gap-5">
         {project.phases.map((phase) => (

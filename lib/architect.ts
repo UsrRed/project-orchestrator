@@ -97,9 +97,14 @@ export async function generateArchitecture(
   idea: string,
   projectType: ProjectType,
   keys: ProviderKeys,
+  /** Préambule optionnel (langue/ton) dérivé du profil utilisateur. */
+  preamble?: string,
 ): Promise<ArchitectResult> {
   const trimmed = idea.trim();
   if (!trimmed) throw new Error("L'idée de projet est vide.");
+
+  const system =
+    (preamble ? preamble.trim() + "\n\n" : "") + SYSTEM_BY_TYPE[projectType];
 
   const { value: object, usage, spec } = await runWithFallback(
     "frontier",
@@ -111,7 +116,7 @@ export async function generateArchitecture(
         // json-mode (response_format) plutôt que tool-mode : compatible avec
         // les serveurs OpenAI-compatible locaux (LM Studio) comme avec le cloud.
         mode: "json",
-        system: SYSTEM_BY_TYPE[projectType],
+        system,
         prompt:
           `Idée de projet (${projectType}) :\n"""${trimmed}"""\n\n` +
           "Génère une arborescence de phases et de tâches cohérente, ordonnée " +
@@ -126,6 +131,70 @@ export async function generateArchitecture(
   const promptTokens = usage?.promptTokens ?? 0;
   const completionTokens = usage?.completionTokens ?? 0;
 
+  return {
+    architecture: object,
+    spec,
+    promptTokens,
+    completionTokens,
+    costUsd: computeCostUsd(spec, promptTokens, completionTokens),
+  };
+}
+
+/** Résumé textuel compact d'une arborescence (pour le contexte de raffinement). */
+function summarizeArchitecture(arch: Architecture): string {
+  return arch.phases
+    .map(
+      (p, i) =>
+        `${i + 1}. ${p.name} (${p.type}) : ` +
+        p.tasks.map((t) => t.title).join(", "),
+    )
+    .join("\n");
+}
+
+/**
+ * Révise une arborescence existante en tenant compte d'une CONTRAINTE / d'un
+ * retour utilisateur (ex: « ajoute une phase sécurité », « on n'a que 2
+ * semaines »). Renvoie une nouvelle arborescence complète.
+ */
+export async function refineArchitecture(
+  idea: string,
+  projectType: ProjectType,
+  current: Architecture,
+  constraint: string,
+  keys: ProviderKeys,
+  preamble?: string,
+): Promise<ArchitectResult> {
+  const c = constraint.trim();
+  if (!c) throw new Error("La contrainte de raffinement est vide.");
+
+  const system =
+    (preamble ? preamble.trim() + "\n\n" : "") + SYSTEM_BY_TYPE[projectType];
+
+  const { value: object, usage, spec } = await runWithFallback(
+    "frontier",
+    keys,
+    async (model, _spec, signal) => {
+      const r = await generateObject({
+        model,
+        schema: architectureSchema,
+        mode: "json",
+        system,
+        prompt:
+          `Idée du projet (${projectType}) :\n"""${idea.trim()}"""\n\n` +
+          `Arborescence actuelle :\n${summarizeArchitecture(current)}\n\n` +
+          `CONTRAINTE / retour à intégrer :\n"""${c}"""\n\n` +
+          "Produis une arborescence RÉVISÉE complète, cohérente et ordonnée, " +
+          "qui tient compte de la contrainte tout en conservant ce qui reste " +
+          "pertinent.",
+        abortSignal: signal,
+        maxRetries: 1,
+      });
+      return { value: r.object, usage: r.usage };
+    },
+  );
+
+  const promptTokens = usage?.promptTokens ?? 0;
+  const completionTokens = usage?.completionTokens ?? 0;
   return {
     architecture: object,
     spec,

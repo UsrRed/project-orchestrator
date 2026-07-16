@@ -6,7 +6,11 @@ import { generateProjectAction, type GenerateState } from "./actions";
 
 const INITIAL: GenerateState = { ok: false, message: "" };
 
-export function NewProjectForm() {
+export function NewProjectForm({
+  defaultType = "tech",
+}: {
+  defaultType?: "tech" | "marketing";
+}) {
   const [state, formAction, pending] = useActionState(
     generateProjectAction,
     INITIAL,
@@ -29,7 +33,7 @@ export function NewProjectForm() {
         <span className="text-neutral-400">Type de projet</span>
         <select
           name="type"
-          defaultValue="tech"
+          defaultValue={defaultType}
           className="rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-neutral-100 outline-none focus:border-emerald-500"
         >
           <option value="tech">Tech / logiciel</option>

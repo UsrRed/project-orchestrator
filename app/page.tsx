@@ -3,7 +3,6 @@ import Link from "next/link";
 import { ExecutionsList } from "@/components/executions-list";
 import { KeysManager } from "@/components/keys-manager";
 import { RouterDemo } from "@/components/router-demo";
-import { UserMenu } from "@/components/user-menu";
 import { executionStats, listExecutions } from "@/lib/executions";
 import { listConnections } from "@/lib/keys";
 import { catalogModelCount, fetchLocalModels } from "@/lib/model-catalog";
@@ -42,12 +41,9 @@ export default async function Home() {
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-10 px-6 py-16">
       <header className="flex flex-col gap-3">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-medium uppercase tracking-widest text-emerald-400">
-            Milestone 1 — routeur d&apos;intelligence
-          </span>
-          <UserMenu />
-        </div>
+        <span className="text-xs font-medium uppercase tracking-widest text-emerald-400">
+          Orchestration dynamique d&apos;IA
+        </span>
         <h1 className="text-4xl font-bold tracking-tight">Orchestrato.AI</h1>
         <p className="text-neutral-400">
           Gestion de projet pilotée par orchestration dynamique d&apos;IA. Le
