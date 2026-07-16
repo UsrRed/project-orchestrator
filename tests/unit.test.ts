@@ -34,6 +34,8 @@ import {
   isMethodSupported,
 } from "@/lib/providers";
 import { findFreeModel, findModel, specForModel } from "@/lib/models";
+import { heuristicPlan, resolveSource } from "@/lib/run-planner";
+import { fullSourceOrder, parseSourceOrder } from "@/lib/sources";
 import {
   isFreeModel,
   listCatalogModels,
@@ -157,6 +159,145 @@ describe("routeur : chaîne de fallback", () => {
     });
     expect(seen).not.toContain("ollama");
     expect(seen).toContain("openai");
+  });
+});
+
+describe("sources : ordre de préférence", () => {
+  it("répare les entrées inconnues, les doublons et les oublis", () => {
+    expect(parseSourceOrder("free,local,free,bogus")).toEqual([
+      "free",
+      "local",
+      "subscription",
+    ]);
+    expect(parseSourceOrder("")).toEqual(["local", "subscription", "free"]);
+    expect(parseSourceOrder(null)).toEqual(["local", "subscription", "free"]);
+  });
+
+  it("n'ajoute le payant qu'avec un plafond > 0, et toujours en dernier", () => {
+    const order = ["subscription", "local", "free"] as const;
+    expect(fullSourceOrder(order, { allowPaid: false })).toEqual([
+      "subscription",
+      "local",
+      "free",
+    ]);
+    expect(fullSourceOrder(order, { allowPaid: true })).toEqual([
+      "subscription",
+      "local",
+      "free",
+      "paid",
+    ]);
+  });
+});
+
+describe("routage dynamique : résolution de la source", () => {
+  const CLIS = [
+    {
+      id: "claude" as const,
+      label: "Claude Code",
+      bin: "claude",
+      available: true,
+      level: 4 as const,
+      reportsCost: true,
+    },
+  ];
+  const ollama = { ollama: { method: "none" as const } };
+
+  it("suit l'ordre de préférence de l'utilisateur", () => {
+    const args = { level: 2 as const, keys: ollama, maxCostUsd: 0, cliAgents: CLIS };
+
+    expect(resolveSource({ ...args, order: ["local", "subscription", "free"] })?.kind)
+      .toBe("local");
+    expect(resolveSource({ ...args, order: ["subscription", "local", "free"] })?.kind)
+      .toBe("subscription");
+  });
+
+  it("saute une source incapable du niveau requis", () => {
+    // LOCAL_MODEL_LEVEL vaut 3 : au niveau 4, seul l'abonnement suit.
+    const resolved = resolveSource({
+      level: 4,
+      keys: ollama,
+      order: ["local", "subscription", "free"],
+      maxCostUsd: 0,
+      cliAgents: CLIS,
+    });
+    expect(resolved?.kind).toBe("subscription");
+  });
+
+  it("plafond 0 : n'élit jamais une source payante", () => {
+    const paidOnly = { anthropic: { method: "api_key" as const, secret: "x" } };
+    expect(
+      resolveSource({
+        level: 3,
+        keys: paidOnly,
+        order: ["local", "subscription", "free"],
+        maxCostUsd: 0,
+        cliAgents: [],
+      }),
+    ).toBeNull();
+
+    // Le même cas avec un plafond devient exécutable, en payant.
+    expect(
+      resolveSource({
+        level: 3,
+        keys: paidOnly,
+        order: ["local", "subscription", "free"],
+        maxCostUsd: 1,
+        cliAgents: [],
+      })?.kind,
+    ).toBe("paid");
+  });
+
+  it("prend l'agent le moins capable qui suffit", () => {
+    const agents = [
+      { ...CLIS[0]!, id: "claude" as const, level: 4 as const },
+      {
+        id: "opencode" as const,
+        label: "OpenCode",
+        bin: "opencode",
+        available: true,
+        level: 2 as const,
+        reportsCost: true,
+      },
+    ];
+    const resolved = resolveSource({
+      level: 2,
+      keys: {},
+      order: ["subscription", "local", "free"],
+      maxCostUsd: 0,
+      cliAgents: agents,
+    });
+    // Pas d'Opus pour une tâche de niveau 2 quand OpenCode y suffit.
+    expect(resolved?.engineCli).toBe("opencode");
+  });
+
+  it("ignore un agent CLI indisponible", () => {
+    const resolved = resolveSource({
+      level: 4,
+      keys: {},
+      order: ["subscription", "local", "free"],
+      maxCostUsd: 0,
+      cliAgents: [{ ...CLIS[0]!, available: false }],
+    });
+    expect(resolved).toBeNull();
+  });
+});
+
+describe("planification d'un run (repli sans IA)", () => {
+  it("borne les limites et adapte le moteur CLI", () => {
+    const base = {
+      goal: "faire un truc",
+      taskTitle: "t",
+      projectName: "p",
+      projectType: "tech",
+    };
+    const llm = heuristicPlan({ ...base, cliEngine: false });
+    expect(llm.planner).toBe("heuristic");
+    expect(llm.maxIterations).toBeGreaterThan(1);
+
+    // Un agent CLI boucle en interne : une invocation, mais longue.
+    const cli = heuristicPlan({ ...base, cliEngine: true });
+    expect(cli.maxIterations).toBe(1);
+    expect(cli.timeoutMin).toBe(30);
   });
 });
 

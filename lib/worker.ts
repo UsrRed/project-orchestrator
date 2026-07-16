@@ -77,13 +77,29 @@ type StopReason =
   | "project_budget"
   | "iterations"
   | "timeout"
-  | "killed";
+  | "killed"
+  | "error";
 
-/** Évalue les garde-fous d'arrêt ; renvoie la raison ou null pour continuer. */
+/**
+ * Évalue les garde-fous d'arrêt ; renvoie la raison ou null pour continuer.
+ *
+ * Le plafond de coût se lit en deux régimes, et les confondre était le bug qui
+ * rendait « 0 » inutilisable : **0 ne veut pas dire « plafond atteint »**, il
+ * veut dire « ce run ne doit rien coûter » (local/abonnement/gratuit). On
+ * n'arrête donc que si une dépense apparaît malgré tout — ce qui ne devrait
+ * jamais arriver, la source ayant été choisie gratuite, mais un run qui se met
+ * à facturer en silence est exactement ce que ce garde-fou doit attraper.
+ *
+ * `maxIterations` peut être null (run pas encore planifié) : la boucle ne
+ * tourne qu'après `applyPlan`, mais on ne se fie pas à cet ordre pour terminer.
+ */
 function guardStop(run: RunRow, now: Date): StopReason | null {
   if (run.killRequested) return "killed";
+  if (run.maxIterations === null) return "error";
   if (run.iterations >= run.maxIterations) return "iterations";
-  if (run.spentUsd >= run.maxCostUsd) return "budget";
+  const overBudget =
+    run.maxCostUsd > 0 ? run.spentUsd >= run.maxCostUsd : run.spentUsd > 0;
+  if (overBudget) return "budget";
   if (run.timeoutAt && now.getTime() > run.timeoutAt.getTime()) return "timeout";
   return null;
 }
@@ -95,6 +111,7 @@ const TERMINAL: Record<StopReason, "succeeded" | "failed" | "cancelled"> = {
   iterations: "failed",
   timeout: "failed",
   killed: "cancelled",
+  error: "failed",
 };
 
 /** Exécute un run déjà réclamé jusqu'à son terme. Renvoie l'état final. */
@@ -113,7 +130,15 @@ export async function processRun(
 
     const preStop = guardStop(fresh, now());
     if (preStop) {
-      await finishRun(runId, TERMINAL[preStop], preStop, undefined, now());
+      await finishRun(
+        runId,
+        TERMINAL[preStop],
+        preStop,
+        preStop === "error"
+          ? "Run démarré sans limites : la planification n'a pas eu lieu."
+          : undefined,
+        now(),
+      );
       break;
     }
     if (deps.budgetExceeded && (await deps.budgetExceeded(fresh))) {

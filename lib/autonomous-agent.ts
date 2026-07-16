@@ -13,7 +13,8 @@ import { generateObject } from "ai";
 import { z } from "zod";
 
 import { runWithFallback, type ProviderKeys } from "@/lib/llm-router";
-import { computeCostUsd } from "@/lib/models";
+import type { IntelligenceLevel } from "@/lib/intelligence";
+import { computeCostUsd, type Provider } from "@/lib/models";
 import { addArtifact, addMessage, getTaskContext, listMessages } from "@/lib/conversation";
 import { recordExecution } from "@/lib/executions";
 import { projectBudgetExceeded } from "@/lib/budgets";
@@ -42,6 +43,16 @@ export interface AutonomousOptions {
    * moins cher atteignant le niveau requis (cf. [llm-router.ts](llm-router.ts)).
    */
   boost?: boolean;
+  /**
+   * Niveau requis, estimé à la planification. Remplace l'ancien tier `fast`
+   * codé en dur, qui appliquait le même plancher (2) à une reformulation comme
+   * à une architecture.
+   */
+  minLevel?: IntelligenceLevel;
+  /** Plafond du run à 0 → aucun modèle facturé ne doit être élu. */
+  freeOnly?: boolean;
+  /** Ne router que vers ces providers (source `local` résolue en amont). */
+  restrictTo?: readonly Provider[];
 }
 
 /**
@@ -89,7 +100,12 @@ export function makeAutonomousDeps(
         });
         return { value: r.object, usage: r.usage };
       },
-      { boost: opts.boost },
+      {
+        boost: opts.boost,
+        minLevel: opts.minLevel,
+        freeOnly: opts.freeOnly,
+        restrictTo: opts.restrictTo,
+      },
     );
 
     const promptTokens = usage?.promptTokens ?? 0;

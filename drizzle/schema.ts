@@ -393,6 +393,15 @@ export const profiles = pgTable("profiles", {
     .default("tech"),
   preferredProvider: providerEnum("preferred_provider"),
   defaultBudgetUsd: numeric("default_budget_usd", { precision: 12, scale: 4 }),
+  /**
+   * Ordre de préférence des sources du routage autonome, en CSV
+   * (« local,subscription,free »). Cf. [lib/sources.ts](../lib/sources.ts).
+   *
+   * Une colonne texte plutôt qu'un tableau PG : la valeur est lue en bloc,
+   * jamais requêtée par élément, et `parseSourceOrder` la répare de toute façon
+   * — un type plus strict n'achèterait aucune garantie ici.
+   */
+  sourceOrder: text("source_order"),
   ...timestamps,
 });
 
@@ -441,14 +450,15 @@ export const autonomousRuns = pgTable("autonomous_runs", {
   goal: text("goal").notNull(),
   status: runStatusEnum("status").notNull().default("queued"),
   /**
-   * Moteur d'exécution : `llm` (routeur AI SDK, défaut historique) ou `cli`
-   * (agent CLI lancé dans le workspace du projet).
+   * Moteur d'exécution : `auto` (résolu par le worker d'après le niveau estimé
+   * et l'ordre de sources du profil — le défaut), `llm` (routeur AI SDK) ou
+   * `cli` (agent CLI lancé dans le workspace du projet).
    *
    * `text` plutôt qu'un enum PG assumé : le registre des CLI bougera plus vite
    * que les migrations, et `providerEnum` montre déjà le coût d'un enum à
    * garder aligné à trois endroits.
    */
-  engine: text("engine").notNull().default("llm"),
+  engine: text("engine").notNull().default("auto"),
   /** Quel CLI quand `engine = 'cli'` : claude | gemini | opencode. */
   engineCli: text("engine_cli"),
   /**
@@ -457,11 +467,34 @@ export const autonomousRuns = pgTable("autonomous_runs", {
    * agent CLI choisit son modèle lui-même).
    */
   boost: boolean("boost").notNull().default(false),
-  /** Garde-fous. */
-  maxIterations: integer("max_iterations").notNull().default(5),
+  /**
+   * Niveau d'intelligence requis, estimé par l'IA à la planification (0-4).
+   * NULL tant que le run n'a pas été planifié.
+   */
+  plannedLevel: integer("planned_level"),
+  /** Justification du plan (niveau + limites), affichée à l'utilisateur. */
+  planReason: text("plan_reason"),
+  /** `ai` | `heuristic` — ne pas faire passer une estimation pour une mesure. */
+  planner: text("planner"),
+  /** Source retenue par le routage : local | subscription | free | paid. */
+  sourceKind: text("source_kind"),
+  /** Étiquette lisible de la source retenue (« Abonnement — Claude Code »). */
+  sourceLabel: text("source_label"),
+  /**
+   * Garde-fous. `NULL` = « à faire estimer par l'IA » ; une valeur = l'utilisateur
+   * a ouvert « Limites » et imposé la sienne, que la planification ne touche pas.
+   */
+  maxIterations: integer("max_iterations"),
+  /**
+   * Plafond de dépense. **0 est une valeur légitime** et le défaut : « n'entame
+   * pas mon crédit », donc local/abonnement/gratuit uniquement. À ne pas
+   * confondre avec un plafond atteint — cf. `guardStop` dans worker.ts.
+   */
   maxCostUsd: numeric("max_cost_usd", { precision: 12, scale: 6 })
     .notNull()
-    .default("0.500000"),
+    .default("0"),
+  /** Minutes demandées. NULL = à estimer. `timeoutAt` en découle au démarrage. */
+  timeoutMin: integer("timeout_min"),
   timeoutAt: timestamp("timeout_at", { withTimezone: true }),
   killRequested: boolean("kill_requested").notNull().default(false),
   /** Progression. */

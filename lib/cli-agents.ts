@@ -15,6 +15,7 @@
  * disponibilité vit dans [cli-availability.ts](cli-availability.ts) (server-only),
  * le lancement dans [cli-agent.ts](cli-agent.ts).
  */
+import type { IntelligenceLevel } from "@/lib/intelligence";
 
 export type CliAgentId = "claude" | "gemini" | "opencode";
 
@@ -91,6 +92,16 @@ export interface CliAgentInfo {
   label: string;
   /** Binaire cherché dans le PATH de la machine du worker. */
   bin: string;
+  /**
+   * Niveau d'intelligence de l'agent (cf. [intelligence.ts](intelligence.ts)),
+   * pour le comparer aux autres sources lors du routage dynamique.
+   *
+   * C'est le niveau du **modèle que le CLI utilise par défaut**, pas celui du
+   * CLI en tant qu'outil : un agent qui lit des fichiers et lance des tests fait
+   * mieux qu'un appel API au même modèle, mais surcoter pour ça reviendrait à
+   * l'élire sur des tâches où un modèle local gratuit suffit.
+   */
+  level: IntelligenceLevel;
   /**
    * Le CLI remonte-t-il un coût réel ? `false` → `costUsd` vaut toujours 0 et
    * le plafond `maxCostUsd` du run est **aveugle** : seuls `maxIterations` et
@@ -261,6 +272,9 @@ export const CLI_AGENTS: readonly CliAgentInfo[] = [
     id: "claude",
     label: "Claude Code",
     bin: "claude",
+    // Tourne sur Opus/Fable par défaut — mêmes niveaux que `claude-opus` dans
+    // FAMILY_LEVELS.
+    level: 4,
     reportsCost: true,
     execProvider: "claude_cli",
     note:
@@ -295,6 +309,8 @@ export const CLI_AGENTS: readonly CliAgentInfo[] = [
     id: "gemini",
     label: "Gemini CLI",
     bin: "gemini",
+    // Gemini Pro par défaut, comme `gemini-pro` dans FAMILY_LEVELS.
+    level: 3,
     // Sortie `-o json` : { response, stats } — aucun coût exposé.
     reportsCost: false,
     execProvider: "gemini_cli",
@@ -333,6 +349,9 @@ export const CLI_AGENTS: readonly CliAgentInfo[] = [
     id: "opencode",
     label: "OpenCode",
     bin: "opencode",
+    // Le niveau de `OPENCODE_CLI_MODEL` (big-pickle, gratuit) — pas celui d'un
+    // frontière : ce CLI est imposé à un modèle gratuit, cf. OPENCODE_CLI_MODEL.
+    level: 2,
     // `step_finish.part.cost` porte un coût réel (0 sur les modèles gratuits).
     reportsCost: true,
     execProvider: "opencode_cli",

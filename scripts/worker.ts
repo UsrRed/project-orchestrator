@@ -1,11 +1,18 @@
 /**
- * Worker du mode Autonome (Milestone 4).
+ * Worker autonome **dédié** (Milestone 4).
  *
- * Processus de fond distinct du serveur Next (le mode Autonome dépasse les
- * limites d'exécution serverless — cf. plan). Il interroge la queue durable
- * (`autonomous_runs`), réclame les runs un par un et les exécute jusqu'au bout
- * avec leurs garde-fous. Plusieurs instances peuvent tourner en parallèle sans
- * double traitement (claim `FOR UPDATE SKIP LOCKED`).
+ * Depuis que `instrumentation.ts` démarre la même boucle dans le process Next,
+ * ce script n'est plus nécessaire au quotidien : `npm run dev` / `npm start`
+ * vident déjà la file. Il reste utile pour déporter l'exécution — serveur web
+ * serverless, ou machine séparée qui porte les agents CLI — auquel cas on pose
+ * `INLINE_WORKER=0` côté web.
+ *
+ * La boucle elle-même vit dans [lib/worker-runtime.ts](../lib/worker-runtime.ts) :
+ * ici on ne fait que charger le `.env` (Next ne le fait pas pour nous) et la
+ * démarrer. Deux workers en parallèle ne se marchent pas dessus : le claim est
+ * atomique (`FOR UPDATE SKIP LOCKED`) et le verrou bat pendant tout le
+ * traitement — c'est ce battement, et non le claim seul, qui empêche un run long
+ * (agent CLI) d'être repris alors qu'il tourne encore.
  *
  * Lancement :  npm run worker
  */
@@ -30,79 +37,19 @@ try {
   // pas de .env : on suppose les variables déjà présentes dans l'environnement.
 }
 
-const POLL_INTERVAL_MS = 2000;
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 async function main(): Promise<void> {
-  // Imports dynamiques APRÈS chargement du .env (db.ts lit process.env à l'import).
-  const { claimNextRun, finishRun } = await import("@/lib/runs");
-  const { processRun } = await import("@/lib/worker");
-  const { makeAutonomousDeps } = await import("@/lib/autonomous-agent");
-  const { makeCliAgentDeps } = await import("@/lib/cli-agent");
-  const { getProviderConnections } = await import("@/lib/keys");
-  const { captureException } = await import("@/lib/observability");
+  // Import dynamique APRÈS chargement du .env (db.ts lit process.env à l'import).
+  const { startWorkerLoop } = await import("@/lib/worker-runtime");
 
   console.log("[worker] démarré — polling de la queue autonomous_runs…");
+  const handle = startWorkerLoop();
 
-  for (;;) {
-    let claimed;
-    try {
-      claimed = await claimNextRun(new Date());
-    } catch (err) {
-      console.error("[worker] erreur de claim :", err);
-      await sleep(POLL_INTERVAL_MS);
-      continue;
-    }
-
-    if (!claimed) {
-      await sleep(POLL_INTERVAL_MS);
-      continue;
-    }
-
-    const engine =
-      claimed.engine === "cli"
-        ? `cli:${claimed.engineCli}`
-        : `llm${claimed.boost ? "+boost" : ""}`;
-    console.log(
-      `[worker] run ${claimed.id} réclamé (${engine}) — objectif: ${claimed.goal}`,
-    );
-
-    // Un run `cli` n'a besoin d'aucune clé LLM : l'agent CLI s'authentifie avec
-    // son propre login. Exiger une clé ici le bloquerait sans raison.
-    let deps;
-    if (claimed.engine === "cli" && claimed.engineCli) {
-      deps = makeCliAgentDeps(claimed.userId, claimed.engineCli);
-    } else {
-      const keys = await getProviderConnections(claimed.userId);
-      if (Object.keys(keys).length === 0) {
-        await finishRun(
-          claimed.id,
-          "failed",
-          "error",
-          "Aucune clé API disponible pour exécuter ce run.",
-        );
-        console.log(`[worker] run ${claimed.id} → échec (aucune clé)`);
-        continue;
-      }
-      deps = makeAutonomousDeps(claimed.userId, keys, { boost: claimed.boost });
-    }
-
-    try {
-      const final = await processRun(claimed, deps);
-      console.log(
-        `[worker] run ${claimed.id} → ${final.status} (${final.stopReason ?? "?"}) ` +
-          `· ${final.iterations} itérations · $${final.spentUsd.toFixed(6)}`,
-      );
-    } catch (err) {
-      await finishRun(
-        claimed.id,
-        "failed",
-        "error",
-        err instanceof Error ? err.message : String(err),
-      );
-      await captureException(err, "worker.run_error", { runId: claimed.id });
-      console.error(`[worker] run ${claimed.id} → erreur :`, err);
-    }
+  for (const sig of ["SIGINT", "SIGTERM"] as const) {
+    process.on(sig, () => {
+      console.log(`[worker] ${sig} reçu — arrêt après le run en cours.`);
+      handle.stop();
+      process.exit(0);
+    });
   }
 }
 

@@ -14,6 +14,8 @@ import { and, asc, desc, eq, lt, or, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import { isCliAgentId, type CliAgentId } from "@/lib/cli-agents";
+import type { IntelligenceLevel } from "@/lib/intelligence";
+import type { SourceKind } from "@/lib/sources";
 import { autonomousRuns } from "@/drizzle/schema";
 
 export type RunStatus =
@@ -23,8 +25,18 @@ export type RunStatus =
   | "failed"
   | "cancelled";
 
-/** Moteur d'exécution d'un run : routeur LLM, ou agent CLI dans un workspace. */
-export type RunEngine = "llm" | "cli";
+/**
+ * Moteur d'exécution d'un run.
+ *
+ * `auto` est le défaut et n'est pas un moteur : c'est l'absence de choix, que le
+ * worker résout en `llm` ou `cli` à la planification, d'après le niveau estimé
+ * de la tâche et l'ordre de sources du profil. Il ne subsiste jamais sur un run
+ * démarré.
+ */
+export type RunEngine = "auto" | "llm" | "cli";
+
+/** Moteur réellement exécutable (ce que `auto` devient une fois résolu). */
+export type ResolvedRunEngine = Exclude<RunEngine, "auto">;
 
 export interface RunRow {
   id: string;
@@ -37,8 +49,17 @@ export interface RunRow {
   engineCli: CliAgentId | null;
   /** Router vers le plus capable plutôt que le moins cher (moteur `llm`). */
   boost: boolean;
-  maxIterations: number;
+  /** Niveau requis estimé (0-4). Null tant que le run n'est pas planifié. */
+  plannedLevel: IntelligenceLevel | null;
+  planReason: string | null;
+  planner: "ai" | "heuristic" | null;
+  sourceKind: SourceKind | null;
+  sourceLabel: string | null;
+  /** Null = à estimer par l'IA ; une valeur = imposée par l'utilisateur. */
+  maxIterations: number | null;
+  /** 0 = gratuit/abonnement uniquement (défaut), pas « plafond atteint ». */
   maxCostUsd: number;
+  timeoutMin: number | null;
   timeoutAt: Date | null;
   killRequested: boolean;
   iterations: number;
@@ -51,6 +72,10 @@ export interface RunRow {
   createdAt: Date;
 }
 
+function mapEngine(v: string): RunEngine {
+  return v === "cli" || v === "auto" ? v : "llm";
+}
+
 function mapRow(r: typeof autonomousRuns.$inferSelect): RunRow {
   return {
     id: r.id,
@@ -58,12 +83,20 @@ function mapRow(r: typeof autonomousRuns.$inferSelect): RunRow {
     taskId: r.taskId,
     goal: r.goal,
     status: r.status as RunStatus,
-    engine: r.engine === "cli" ? "cli" : "llm",
+    engine: mapEngine(r.engine),
     engineCli:
       r.engineCli && isCliAgentId(r.engineCli) ? r.engineCli : null,
     boost: r.boost,
+    plannedLevel:
+      r.plannedLevel === null ? null : (r.plannedLevel as IntelligenceLevel),
+    planReason: r.planReason,
+    planner:
+      r.planner === "ai" || r.planner === "heuristic" ? r.planner : null,
+    sourceKind: (r.sourceKind as SourceKind) ?? null,
+    sourceLabel: r.sourceLabel,
     maxIterations: r.maxIterations,
     maxCostUsd: Number(r.maxCostUsd),
+    timeoutMin: r.timeoutMin,
     timeoutAt: r.timeoutAt,
     killRequested: r.killRequested,
     iterations: r.iterations,
@@ -79,35 +112,36 @@ function mapRow(r: typeof autonomousRuns.$inferSelect): RunRow {
 
 export interface EnqueueInput {
   goal: string;
+  /** Défaut `auto` : le worker choisira la source d'après le niveau estimé. */
   engine?: RunEngine;
   engineCli?: string;
   boost?: boolean;
-  maxIterations?: number;
+  /** `undefined`/`null` → estimé par l'IA à la planification. */
+  maxIterations?: number | null;
+  /** Défaut 0 : gratuit/abonnement uniquement. */
   maxCostUsd?: number;
-  timeoutMs?: number;
+  /** `undefined`/`null` → estimé par l'IA. `timeoutAt` en découle au démarrage. */
+  timeoutMin?: number | null;
 }
 
 /**
- * Itérations par défaut selon le moteur.
+ * Place un run en file (statut `queued`). L'appartenance de la tâche doit être
+ * vérifiée par l'appelant (action).
  *
- * Un agent CLI boucle déjà en interne : une invocation suffit à mener
- * l'objectif au bout. Le moteur `llm`, lui, avance par petites étapes et a
- * besoin de plusieurs passes.
+ * Ne décide plus ni du moteur ni des limites : un run part avec ce que
+ * l'utilisateur a **explicitement** imposé, le reste reste `null` et sera
+ * planifié par le worker ([run-planner.ts](run-planner.ts)). C'est ce qui rend
+ * la mise en file instantanée — aucun appel LLM ne bloque le formulaire.
  */
-const DEFAULT_MAX_ITERATIONS: Record<RunEngine, number> = { llm: 5, cli: 1 };
-
-/** Place un run en file (statut `queued`). L'appartenance de la tâche doit être
- *  vérifiée par l'appelant (action). */
 export async function enqueueRun(
   userId: string,
   taskId: string,
   input: EnqueueInput,
-  now: Date = new Date(),
 ): Promise<string> {
   const goal = input.goal.trim();
   if (!goal) throw new Error("Objectif du run vide.");
 
-  const engine: RunEngine = input.engine === "cli" ? "cli" : "llm";
+  const engine: RunEngine = input.engine ?? "auto";
   // Un run `cli` sans CLI valide n'est pas exécutable : on refuse ici plutôt
   // que de laisser le worker échouer après coup.
   if (engine === "cli" && !(input.engineCli && isCliAgentId(input.engineCli))) {
@@ -115,11 +149,6 @@ export async function enqueueRun(
       `Moteur CLI invalide : « ${input.engineCli ?? "(aucun)"} ».`,
     );
   }
-
-  const timeoutAt =
-    input.timeoutMs && input.timeoutMs > 0
-      ? new Date(now.getTime() + input.timeoutMs)
-      : null;
 
   const [row] = await db
     .insert(autonomousRuns)
@@ -131,13 +160,56 @@ export async function enqueueRun(
       engineCli: engine === "cli" ? (input.engineCli as CliAgentId) : null,
       // Sans objet pour un agent CLI, qui choisit son modèle lui-même.
       boost: engine === "llm" && Boolean(input.boost),
-      maxIterations: input.maxIterations ?? DEFAULT_MAX_ITERATIONS[engine],
-      maxCostUsd: (input.maxCostUsd ?? 0.5).toFixed(6),
-      timeoutAt,
+      maxIterations: input.maxIterations ?? null,
+      maxCostUsd: Math.max(input.maxCostUsd ?? 0, 0).toFixed(6),
+      timeoutMin: input.timeoutMin ?? null,
     })
     .returning({ id: autonomousRuns.id });
   if (!row) throw new Error("Échec de mise en file du run.");
   return row.id;
+}
+
+/** Ce que la planification a décidé, à écrire sur le run avant sa 1re étape. */
+export interface RunPlanPatch {
+  engine: ResolvedRunEngine;
+  engineCli?: string | null;
+  plannedLevel: IntelligenceLevel;
+  planReason: string;
+  planner: "ai" | "heuristic";
+  /** `null` quand l'utilisateur a imposé le moteur : rien n'a été « routé ». */
+  sourceKind?: SourceKind | null;
+  sourceLabel: string;
+  maxIterations: number;
+  timeoutMin: number;
+}
+
+/**
+ * Fige le plan sur le run et arme le timeout.
+ *
+ * `timeoutAt` est calculé **ici**, au démarrage réel, et non à la mise en file :
+ * un run peut attendre des heures dans la queue, et un timeout qui court pendant
+ * l'attente tuerait le run avant sa première étape.
+ */
+export async function applyPlan(
+  runId: string,
+  patch: RunPlanPatch,
+  now: Date = new Date(),
+): Promise<void> {
+  await db
+    .update(autonomousRuns)
+    .set({
+      engine: patch.engine,
+      engineCli: patch.engineCli ?? null,
+      plannedLevel: patch.plannedLevel,
+      planReason: patch.planReason,
+      planner: patch.planner,
+      sourceKind: patch.sourceKind ?? null,
+      sourceLabel: patch.sourceLabel,
+      maxIterations: patch.maxIterations,
+      timeoutMin: patch.timeoutMin,
+      timeoutAt: new Date(now.getTime() + patch.timeoutMin * 60_000),
+    })
+    .where(eq(autonomousRuns.id, runId));
 }
 
 /**
@@ -188,6 +260,23 @@ export async function claimNextRun(
 
     return updated ? mapRow(updated) : null;
   });
+}
+
+/**
+ * Rafraîchit le verrou d'un run en cours (heartbeat).
+ *
+ * `claimNextRun` considère un run `running` dont le verrou dépasse `staleLockMs`
+ * comme abandonné par un worker mort, et le reprend. Or `recordIteration` ne
+ * repousse le verrou qu'entre deux étapes : une étape longue — un agent CLI
+ * travaille en minutes — laisserait le verrou pourrir et un second worker
+ * relancerait le même run **en parallèle**, écrivant deux fois dans le même
+ * workspace. D'où ce battement pendant l'étape elle-même.
+ */
+export async function touchRun(runId: string): Promise<void> {
+  await db
+    .update(autonomousRuns)
+    .set({ lockedAt: sql`now()` })
+    .where(eq(autonomousRuns.id, runId));
 }
 
 /** Renvoie l'état frais d'un run (le worker le relit à chaque itération). */

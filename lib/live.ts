@@ -33,7 +33,8 @@ export interface LiveAgent {
   engine: string;
   boost: boolean;
   iterations: number;
-  maxIterations: number;
+  /** Null tant que le run n'est pas planifié : la limite n'existe pas encore. */
+  maxIterations: number | null;
   spentUsd: number;
   maxCostUsd: number;
   /** Millisecondes écoulées depuis le démarrage ; null si encore en file. */

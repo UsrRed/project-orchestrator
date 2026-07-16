@@ -80,6 +80,15 @@ export const LOCAL_MODEL_LEVEL = Number(
   process.env.LOCAL_AI_LEVEL ?? 3,
 ) as IntelligenceLevel;
 
+/**
+ * Fenêtre de contexte supposée du modèle local, configurable via
+ * `LOCAL_AI_CONTEXT`. Comme son niveau, elle dépend du modèle chargé : 32k est
+ * le défaut courant de LM Studio.
+ */
+export const LOCAL_MODEL_CONTEXT = Number(
+  process.env.LOCAL_AI_CONTEXT ?? 32_768,
+);
+
 /** Spec du modèle local (LM Studio / Ollama), coût nul. */
 function localSpec(tier: Tier): ModelSpec {
   return {
@@ -89,8 +98,14 @@ function localSpec(tier: Tier): ModelSpec {
     level: LOCAL_MODEL_LEVEL,
     inputPerMTok: 0,
     outputPerMTok: 0,
-    contextWindow: 32_768,
+    contextWindow: LOCAL_MODEL_CONTEXT,
   };
+}
+
+/** Le modèle local satisfait-il le niveau ET le contexte demandés ? */
+function localFits(minLevel: IntelligenceLevel, opts: FindOptions): boolean {
+  if (LOCAL_MODEL_LEVEL < minLevel) return false;
+  return !opts.minContext || LOCAL_MODEL_CONTEXT >= opts.minContext;
 }
 
 /** Coût USD pour un nombre de tokens d'entrée/sortie donné. */
@@ -105,6 +120,19 @@ export function computeCostUsd(
 }
 
 /**
+ * Options de recherche d'un modèle pour un tier.
+ *
+ * `minLevel` court-circuite le plancher du tier. Nécessaire depuis que le mode
+ * Autonome fait **estimer le niveau de la tâche par une IA** : le tier ne connaît
+ * que deux planchers (2 et 3) là où l'estimation en produit cinq, et arrondir un
+ * niveau 1 à « fast » ferait payer un modèle avancé pour une reformulation —
+ * exactement ce que le routage cherche à éviter.
+ */
+export interface FindOptions extends Omit<PickOptions, "free"> {
+  minLevel?: IntelligenceLevel;
+}
+
+/**
  * ModelSpec du tier voulu pour un provider : le **moins cher qui atteint le
  * niveau requis** par le tier (ou le plus capable en `boost`). Le local est
  * gratuit et supposé de niveau `LOCAL_MODEL_LEVEL`.
@@ -115,11 +143,11 @@ export function computeCostUsd(
 export function findModel(
   provider: Provider,
   tier: Tier,
-  opts: Omit<PickOptions, "free"> = {},
+  opts: FindOptions = {},
 ): ModelSpec | undefined {
-  const minLevel = TIER_MIN_LEVEL[tier];
+  const minLevel = opts.minLevel ?? TIER_MIN_LEVEL[tier];
   if (provider === "ollama") {
-    return LOCAL_MODEL_LEVEL >= minLevel ? localSpec(tier) : undefined;
+    return localFits(minLevel, opts) ? localSpec(tier) : undefined;
   }
   const m = pickModelForLevel(provider, minLevel, opts);
   if (!m) return undefined;
@@ -142,11 +170,11 @@ export function findModel(
 export function findFreeModel(
   provider: Provider,
   tier: Tier,
-  opts: Omit<PickOptions, "free"> = {},
+  opts: FindOptions = {},
 ): ModelSpec | undefined {
-  const minLevel = TIER_MIN_LEVEL[tier];
+  const minLevel = opts.minLevel ?? TIER_MIN_LEVEL[tier];
   if (provider === "ollama") {
-    return LOCAL_MODEL_LEVEL >= minLevel ? localSpec(tier) : undefined;
+    return localFits(minLevel, opts) ? localSpec(tier) : undefined;
   }
   const m = pickFreeModelForLevel(provider, minLevel, opts);
   if (!m) return undefined;

@@ -386,8 +386,11 @@ function AgentRow({ agent: a }: { agent: LiveAgent }) {
           {a.goal}
         </span>
         <span className="font-mono text-[10px] text-neutral-500">
-          {a.iterations}/{a.maxIterations} it · ${a.spentUsd.toFixed(4)}/$
-          {a.maxCostUsd.toFixed(2)}
+          {/* Limites absentes tant que l'IA n'a pas planifié le run. */}
+          {a.iterations}/{a.maxIterations ?? "?"} it ·{" "}
+          {a.maxCostUsd > 0
+            ? `$${a.spentUsd.toFixed(4)}/$${a.maxCostUsd.toFixed(2)}`
+            : "gratuit"}
         </span>
       </Link>
     </li>

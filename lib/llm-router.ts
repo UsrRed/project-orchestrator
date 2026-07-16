@@ -21,6 +21,7 @@ import {
   computeCostUsd,
   findFreeModel,
   findModel,
+  type FindOptions,
   type ModelSpec,
   type Provider,
   type Tier,
@@ -204,9 +205,22 @@ export function selectModel(
   return first;
 }
 
-export interface ChainOptions {
-  /** Cf. `RouteRequest.boost` : le plus capable plutôt que le moins cher. */
-  boost?: boolean;
+/**
+ * `FindOptions` porte déjà `boost`, `minLevel` (plancher d'intelligence
+ * explicite, à la place de celui du tier — le mode Autonome estime le niveau sur
+ * les cinq crans de [intelligence.ts](intelligence.ts), pas sur les deux du
+ * tier) et `minContext`. On n'ajoute ici que ce qui concerne la **chaîne**.
+ */
+export interface ChainOptions extends FindOptions {
+  /**
+   * N'autoriser que les modèles à coût nul. C'est le sens d'un plafond de run à
+   * 0 $ : « n'entame pas mon crédit ». Une chaîne vide est alors un résultat
+   * légitime — mieux vaut refuser le run que de facturer ce qui devait être
+   * gratuit.
+   */
+  freeOnly?: boolean;
+  /** Ne considérer que ces providers (résolution d'une source `local`). */
+  restrictTo?: readonly Provider[];
 }
 
 /**
@@ -242,12 +256,15 @@ export function selectModelChain(
     chain.push(spec);
   };
 
+  const usable = (p: Provider): boolean =>
+    Boolean(keys[p]) && (!opts.restrictTo || opts.restrictTo.includes(p));
+
   if (opts.boost) {
     const candidates: ModelSpec[] = [];
     for (const provider of PREFERENCE[tier]) {
-      if (!keys[provider]) continue;
+      if (!usable(provider)) continue;
       const free = findFreeModel(provider, tier, opts);
-      const paid = findModel(provider, tier, opts);
+      const paid = opts.freeOnly ? undefined : findModel(provider, tier, opts);
       if (free) candidates.push(free);
       if (paid) candidates.push(paid);
     }
@@ -262,10 +279,11 @@ export function selectModelChain(
   }
 
   for (const provider of PREFERENCE[tier]) {
-    if (keys[provider]) push(findFreeModel(provider, tier, opts));
+    if (usable(provider)) push(findFreeModel(provider, tier, opts));
   }
+  if (opts.freeOnly) return chain;
   for (const provider of PREFERENCE[tier]) {
-    if (keys[provider]) push(findModel(provider, tier, opts));
+    if (usable(provider)) push(findModel(provider, tier, opts));
   }
   return chain;
 }
@@ -372,13 +390,11 @@ export interface LlmUsage {
   completionTokens?: number;
 }
 
-export interface FallbackOptions {
+export interface FallbackOptions extends ChainOptions {
   /** Délai avant abandon d'un provider (ms). Défaut 60s. */
   timeoutMs?: number;
   /** Horloge injectable (tests). */
   now?: () => number;
-  /** Cf. `RouteRequest.boost` : le plus capable plutôt que le moins cher. */
-  boost?: boolean;
 }
 
 export interface FallbackResult<T> {
@@ -408,10 +424,12 @@ export async function runWithFallback<T>(
   const now = opts.now ?? (() => Date.now());
   const timeoutMs = opts.timeoutMs ?? 60_000;
 
-  const chain = selectModelChain(tier, keys, { boost: opts.boost });
+  const chain = selectModelChain(tier, keys, opts);
   if (chain.length === 0) {
     throw new Error(
-      `Aucun provider disponible pour le tier « ${tier} ». Ajoutez au moins une clé API.`,
+      opts.freeOnly
+        ? "Aucun modèle gratuit assez capable pour cette tâche. Relève le plafond de coût du run, ou branche un modèle local."
+        : `Aucun provider disponible pour le tier « ${tier} ». Ajoutez au moins une clé API.`,
     );
   }
 

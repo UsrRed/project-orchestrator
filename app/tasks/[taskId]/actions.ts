@@ -226,30 +226,62 @@ export interface RunFormState {
   message: string;
 }
 
-/** Met un run autonome en file (le worker le traitera en arrière-plan). */
+/**
+ * Champ numérique optionnel : `null` quand l'utilisateur n'a rien imposé (le
+ * planificateur décidera). Distinguer « vide » de « 0 » compte ici — 0 est une
+ * valeur signifiante pour le plafond.
+ */
+function optionalNumber(v: FormDataEntryValue | null): number | null {
+  const s = String(v ?? "").trim();
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function clamp(n: number, min: number, max: number): number {
+  return Math.min(Math.max(n, min), max);
+}
+
+/**
+ * Met un run autonome en file. Le worker le prend en charge tout seul (cf.
+ * [worker-runtime.ts](../../../lib/worker-runtime.ts)) : plus rien à lancer.
+ *
+ * L'action ne décide de rien qu'elle ne sache : sans « Modèle personnalisé » le
+ * moteur reste `auto`, sans « Limites » les bornes restent `null`. Ce sont des
+ * trous que la planification comblera, pas des défauts inventés ici.
+ */
 export async function startRunAction(
   _prev: RunFormState,
   formData: FormData,
 ): Promise<RunFormState> {
   const taskId = String(formData.get("taskId") ?? "");
   const goal = String(formData.get("goal") ?? "").trim();
-  // Le formulaire envoie « llm » ou l'id d'un CLI (« claude »…) dans un seul
-  // champ : c'est un choix unique côté utilisateur.
-  const engineChoice = String(formData.get("engine") ?? "llm");
-  const isCli = engineChoice !== "llm";
-  const boost = formData.get("boost") === "on";
-  const maxIterations = Math.min(
-    Math.max(Number(formData.get("maxIterations") ?? (isCli ? 1 : 5)), 1),
-    20,
-  );
-  const maxCostUsd = Math.min(
-    Math.max(Number(formData.get("maxCostUsd") ?? 0.5), 0.01),
-    50,
-  );
-  const timeoutMin = Math.min(
-    Math.max(Number(formData.get("timeoutMin") ?? 10), 1),
-    120,
-  );
+
+  // Cases « avancées » : tant qu'elles sont fermées, leurs champs ne comptent
+  // pas — un champ resté monté dans le DOM ne doit pas forcer une valeur que
+  // l'utilisateur ne voit plus.
+  const customModel = formData.get("customModel") === "on";
+  const customLimits = formData.get("customLimits") === "on";
+
+  const engineChoice = customModel
+    ? String(formData.get("engine") ?? "llm")
+    : "auto";
+  const isCli = engineChoice !== "llm" && engineChoice !== "auto";
+  const boost = customModel && formData.get("boost") === "on";
+
+  const rawIterations = customLimits
+    ? optionalNumber(formData.get("maxIterations"))
+    : null;
+  const rawTimeout = customLimits
+    ? optionalNumber(formData.get("timeoutMin"))
+    : null;
+  const maxIterations =
+    rawIterations === null ? null : clamp(rawIterations, 1, 20);
+  const timeoutMin = rawTimeout === null ? null : clamp(rawTimeout, 1, 120);
+
+  // Le plafond est toujours lu : c'est le réglage principal, pas un avancé.
+  // 0 (le défaut) = « gratuit / abonnement uniquement ».
+  const maxCostUsd = clamp(optionalNumber(formData.get("maxCostUsd")) ?? 0, 0, 50);
 
   if (!taskId) return { ok: false, message: "Tâche manquante." };
   if (!goal) return { ok: false, message: "Décris l'objectif du run." };
@@ -262,23 +294,26 @@ export async function startRunAction(
   const ctx = await getTaskContext(userId, taskId);
   if (!ctx) return { ok: false, message: "Tâche introuvable." };
 
-  // Un agent CLI s'authentifie avec son propre login : lui réclamer une clé LLM
-  // n'aurait aucun sens. Le contrôle ne vaut que pour le moteur `llm`.
-  if (!isCli) {
-    const keys = await getProviderConnections(userId);
-    if (Object.keys(keys).length === 0) {
-      return {
-        ok: false,
-        message: "Aucune clé API. Ajoute-en une sur l'accueil avant de lancer.",
-      };
-    }
-  } else {
+  if (isCli) {
     const status = cliAgentStatuses().find((s) => s.id === engineChoice);
     if (!status?.available) {
       return {
         ok: false,
         message:
           status?.warning ?? `L'agent \`${engineChoice}\` n'est pas disponible.`,
+      };
+    }
+  } else {
+    // Un agent CLI s'authentifie avec son propre login : lui réclamer une clé
+    // LLM n'aurait aucun sens. En `auto`, l'abonnement peut suffire — on ne
+    // bloque donc que si RIEN n'est utilisable.
+    const keys = await getProviderConnections(userId);
+    const hasCli = cliAgentStatuses().some((s) => s.available);
+    if (Object.keys(keys).length === 0 && !(engineChoice === "auto" && hasCli)) {
+      return {
+        ok: false,
+        message:
+          "Aucune clé API ni agent CLI disponible. Ajoute une connexion sur /models avant de lancer.",
       };
     }
   }
@@ -291,18 +326,20 @@ export async function startRunAction(
 
   await enqueueRun(userId, taskId, {
     goal,
-    engine: isCli ? "cli" : "llm",
+    engine: isCli ? "cli" : engineChoice === "auto" ? "auto" : "llm",
     engineCli: isCli ? engineChoice : undefined,
     boost,
     maxIterations,
     maxCostUsd,
-    timeoutMs: timeoutMin * 60_000,
+    timeoutMin,
   });
   revalidatePath(`/tasks/${taskId}`);
   return {
     ok: true,
     message:
-      "Run mis en file. Lance le worker (npm run worker) pour l'exécuter en arrière-plan.",
+      engineChoice === "auto"
+        ? "Run lancé. L'IA évalue la tâche, choisit la source et démarre — suis la progression ci-dessous."
+        : "Run lancé. Suis la progression ci-dessous.",
   };
 }
 

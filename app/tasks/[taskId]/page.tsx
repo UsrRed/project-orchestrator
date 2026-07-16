@@ -15,6 +15,7 @@ import {
   type CoworkOptionsData,
 } from "@/lib/conversation";
 import { cliAgentStatuses } from "@/lib/cli-availability";
+import { getProfile } from "@/lib/profile";
 import { listRunsForTask } from "@/lib/runs";
 import { listPhaseNormes } from "@/lib/normes";
 import { getCurrentUserId } from "@/lib/users";
@@ -22,11 +23,34 @@ import { setModeAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Les trois modes, décrits par ce que l'utilisateur *fait* — pas par leur nom
+ * de code. Le mode pilote la page entière : chaque mode n'affiche que son propre
+ * outil, au lieu d'empiler les trois et de laisser deviner lequel agit.
+ */
 const MODES = [
   { value: "manual", label: "Manuel" },
   { value: "cowork", label: "Cowork" },
-  { value: "autonomous", label: "Autonome (M4)" },
+  { value: "autonomous", label: "Autonome" },
 ];
+
+const MODE_INTRO: Record<string, { title: string; detail: string }> = {
+  manual: {
+    title: "Tu discutes, l'agent répond.",
+    detail:
+      "Une conversation ordinaire : rien ne se produit sans que tu écrives. Aucun fichier n'est touché.",
+  },
+  cowork: {
+    title: "L'agent propose, tu choisis, il produit.",
+    detail:
+      "Tu décris ton besoin ; l'agent s'arrête et propose des options plutôt que de foncer. Ton choix déclenche la production d'un artefact (un document), ajouté plus bas.",
+  },
+  autonomous: {
+    title: "Tu donnes un objectif, l'agent travaille seul.",
+    detail:
+      "L'agent boucle en arrière-plan jusqu'à l'objectif, encadré par un plafond de dépense, un nombre d'étapes et un timeout. Tu peux l'arrêter à tout moment.",
+  },
+};
 
 export default async function TaskChatPage({
   params,
@@ -38,13 +62,17 @@ export default async function TaskChatPage({
   const ctx = await getTaskContext(userId, taskId);
   if (!ctx) notFound();
 
-  const [messages, artifacts, cowork, runs, norms] = await Promise.all([
+  const [messages, artifacts, cowork, runs, norms, profile] = await Promise.all([
     listMessages(userId, taskId),
     listArtifacts(userId, taskId),
     getCoworkStatus(userId, taskId),
     listRunsForTask(userId, taskId),
     listPhaseNormes(userId, ctx.phaseId),
+    getProfile(userId),
   ]);
+
+  const isAutonomous = ctx.taskMode === "autonomous";
+  const intro = MODE_INTRO[ctx.taskMode] ?? MODE_INTRO.manual!;
 
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-6 px-6 py-16">
@@ -72,7 +100,7 @@ export default async function TaskChatPage({
           <form action={setModeAction} className="shrink-0">
             <input type="hidden" name="taskId" value={taskId} />
             <label className="flex flex-col items-end gap-1 text-xs text-neutral-500">
-              Mode
+              Mode de travail
               <AutoSubmitSelect
                 name="mode"
                 defaultValue={ctx.taskMode}
@@ -82,6 +110,25 @@ export default async function TaskChatPage({
             </label>
           </form>
         </div>
+      </div>
+
+      {/* Ce que le mode courant implique, en clair : le sélecteur seul ne dit
+          pas ce qui va se passer. */}
+      <div
+        className={`rounded-xl border px-4 py-3 ${
+          isAutonomous
+            ? "border-sky-900/50 bg-sky-950/20"
+            : "border-neutral-800 bg-neutral-900/40"
+        }`}
+      >
+        <p
+          className={`text-sm font-medium ${
+            isAutonomous ? "text-sky-200" : "text-neutral-200"
+          }`}
+        >
+          {intro.title}
+        </p>
+        <p className="mt-1 text-xs text-neutral-500">{intro.detail}</p>
       </div>
 
       {/* Panneau adaptatif par type de phase (M6) */}
@@ -105,62 +152,62 @@ export default async function TaskChatPage({
         </div>
       )}
 
-      {/* Fil de discussion */}
-      <section className="flex flex-col gap-3 rounded-xl border border-neutral-800 bg-neutral-900/40 p-5">
-        {messages.length === 0 ? (
-          <p className="text-sm text-neutral-500">
-            {ctx.taskMode === "cowork"
-              ? "Mode Cowork : décris ton besoin, l'agent proposera des options avant d'agir."
-              : "Mode Manuel : démarre la discussion avec l'agent."}
-          </p>
-        ) : (
-          messages.map((m) => <MessageBubble key={m.id} message={m} />)
-        )}
-      </section>
+      {/* L'outil du mode courant, et lui seul : les trois panneaux empilés
+          faisaient de cette page une devinette (« lequel agit ? »). */}
+      {isAutonomous ? (
+        <section className="rounded-xl border border-sky-900/50 bg-sky-950/10 p-5">
+          <AutonomousPanel
+            taskId={taskId}
+            runs={runs}
+            cliAgents={cliAgentStatuses()}
+            sourceOrder={profile.sourceOrder}
+          />
+        </section>
+      ) : (
+        <section className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5">
+          <TaskChat
+            taskId={taskId}
+            mode={ctx.taskMode}
+            awaitingChoice={cowork.awaitingChoice}
+            pendingOptions={cowork.pendingOptions}
+          />
+        </section>
+      )}
 
-      {/* Composeur / choix Cowork */}
-      <section className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5">
-        <TaskChat
-          taskId={taskId}
-          mode={ctx.taskMode}
-          awaitingChoice={cowork.awaitingChoice}
-          pendingOptions={cowork.pendingOptions}
-        />
-      </section>
-
-      {/* Mode Autonome : runs en arrière-plan */}
-      <section className="rounded-xl border border-sky-900/50 bg-sky-950/10 p-5">
-        <h2 className="mb-1 text-lg font-semibold text-sky-200">
-          Mode Autonome (Full-Auto)
+      {/* Le fil : conversation en Manuel/Cowork, journal du run en Autonome. */}
+      <section className="flex flex-col gap-3">
+        <h2 className="text-xs uppercase tracking-wide text-neutral-500">
+          {isAutonomous ? "Journal de l'agent" : "Conversation"}
         </h2>
-        <p className="mb-4 text-sm text-neutral-500">
-          Lance un run en arrière-plan avec garde-fous (itérations, plafond de
-          coût vérifié à chaque étape, timeout, kill switch). Exécuté par le
-          worker&nbsp;: <code>npm run worker</code>.
-        </p>
-        <AutonomousPanel
-          taskId={taskId}
-          runs={runs}
-          cliAgents={cliAgentStatuses()}
-        />
-      </section>
-
-      {/* Widgets « generative UI » (M6) */}
-      <section className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5">
-        <h2 className="mb-1 text-lg font-semibold">Widget à la volée</h2>
-        <p className="mb-4 text-sm text-neutral-500">
-          Le modèle produit des <strong>données structurées</strong> (schéma
-          fixe), rendues par des composants whitelistés — jamais de code
-          exécuté côté client.
-        </p>
-        <WidgetGenerator taskId={taskId} />
+        <div className="flex flex-col gap-3 rounded-xl border border-neutral-800 bg-neutral-900/40 p-5">
+          {messages.length === 0 ? (
+            <p className="text-sm text-neutral-500">
+              {isAutonomous
+                ? "Aucun run pour l'instant. Lance l'agent ci-dessus : ses étapes s'afficheront ici au fil de l'eau."
+                : "Rien encore — écris le premier message ci-dessus."}
+            </p>
+          ) : (
+            messages.map((m) => <MessageBubble key={m.id} message={m} />)
+          )}
+        </div>
       </section>
 
       {/* Artefacts produits (documents + widgets rendus) */}
-      {artifacts.length > 0 && (
-        <section className="flex flex-col gap-3">
+      <section className="flex flex-col gap-3">
+        <div className="flex items-baseline justify-between gap-4">
           <h2 className="text-lg font-semibold">Artefacts</h2>
-          {artifacts.map((a) =>
+          <span className="text-xs text-neutral-600">
+            Ce que l&apos;agent a produit pour cette tâche
+          </span>
+        </div>
+
+        {artifacts.length === 0 && (
+          <p className="rounded-xl border border-dashed border-neutral-800 px-4 py-6 text-center text-sm text-neutral-600">
+            Aucun artefact pour l&apos;instant.
+          </p>
+        )}
+
+        {artifacts.map((a) =>
             a.type === "widget" ? (
               <div
                 key={a.id}
@@ -182,9 +229,24 @@ export default async function TaskChatPage({
                 </pre>
               </details>
             ),
-          )}
-        </section>
-      )}
+        )}
+
+        {/* Outil d'appoint, replié : il ne fait pas avancer la tâche, il met
+            en forme. Déplié au milieu de la page, il passait pour un troisième
+            mode d'exécution. */}
+        <details className="rounded-xl border border-neutral-800 bg-neutral-900/30 px-4 py-3">
+          <summary className="cursor-pointer text-sm text-neutral-400 hover:text-neutral-200">
+            + Générer un tableau ou une checklist à partir de cette tâche
+          </summary>
+          <p className="mb-3 mt-3 text-xs text-neutral-500">
+            Le modèle remplit un <strong>schéma de données fixe</strong> (tableau,
+            liste, indicateurs), rendu par des composants whitelistés — jamais de
+            code exécuté côté client. Le résultat s&apos;ajoute aux artefacts
+            ci-dessus.
+          </p>
+          <WidgetGenerator taskId={taskId} />
+        </details>
+      </section>
     </main>
   );
 }

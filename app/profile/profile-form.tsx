@@ -5,6 +5,11 @@ import { useActionState } from "react";
 import { saveProfileAction, type ProfileFormState } from "./actions";
 import type { Profile } from "@/lib/profile";
 import { PROVIDERS } from "@/lib/providers";
+import {
+  ORDERED_SOURCE_KINDS,
+  SOURCE_HINT,
+  SOURCE_LABEL,
+} from "@/lib/sources";
 
 const INITIAL: ProfileFormState = { ok: false, message: "" };
 
@@ -89,6 +94,50 @@ export function ProfileForm({ profile }: { profile: Profile }) {
           />
         </label>
       </div>
+
+      <fieldset className="flex flex-col gap-2 rounded-lg border border-neutral-800 bg-neutral-950/40 p-4">
+        <legend className="px-1 text-sm text-neutral-400">
+          Priorité des sources (mode Autonome)
+        </legend>
+        <p className="text-xs text-neutral-500">
+          Quand tu ne choisis pas le modèle toi-même, l&apos;IA estime le niveau
+          requis par la tâche puis prend la <strong>première source de cette
+          liste qui en est capable</strong>. Le payant n&apos;est jamais essayé
+          avant les trois autres, et jamais si le plafond du run vaut 0.
+        </p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          {[0, 1, 2].map((rank) => (
+            <label
+              key={rank}
+              className="flex flex-col gap-1 text-xs text-neutral-500"
+            >
+              {rank + 1}
+              {rank === 0 ? "er" : "e"} choix
+              {/* Même nom pour les trois : l'action lit `getAll` et
+                  `parseSourceOrder` répare doublons et oublis. */}
+              <select
+                name="sourceOrder"
+                defaultValue={profile.sourceOrder[rank]}
+                className="rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500"
+              >
+                {ORDERED_SOURCE_KINDS.map((s) => (
+                  <option key={s} value={s} title={SOURCE_HINT[s]}>
+                    {SOURCE_LABEL[s]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
+        </div>
+        <p className="text-xs text-neutral-600">
+          {ORDERED_SOURCE_KINDS.map((s) => (
+            <span key={s} className="mr-3 inline-block">
+              <strong className="text-neutral-400">{SOURCE_LABEL[s]}</strong> —{" "}
+              {SOURCE_HINT[s]}
+            </span>
+          ))}
+        </p>
+      </fieldset>
 
       <button
         type="submit"

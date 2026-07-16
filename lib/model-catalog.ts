@@ -171,6 +171,13 @@ export interface PickOptions {
    * cher qui suffit. Pour les tâches où la qualité prime sur la dépense.
    */
   boost?: boolean;
+  /**
+   * Fenêtre de contexte minimale (tokens). Un modèle assez *intelligent* mais
+   * trop *étroit* pour la tâche n'est pas un candidat : il tronquerait l'entrée
+   * et raisonnerait sur autre chose que ce qu'on lui demande — un échec plus
+   * insidieux qu'une erreur, puisqu'il rend une réponse plausible.
+   */
+  minContext?: number;
 }
 
 /**
@@ -194,6 +201,7 @@ export function pickModelForLevel(
 ): CatalogModel | undefined {
   const pool = (opts.free ? listFreeModels(provider) : listCatalogModels(provider))
     .filter((m) => !opts.free || isFreeModel(m))
+    .filter((m) => !opts.minContext || m.context >= opts.minContext)
     .map((m) => ({ m, level: levelOf(m) }))
     .filter((x) => x.level >= minLevel);
 

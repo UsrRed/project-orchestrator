@@ -99,6 +99,13 @@
       "when": 1784229848597,
       "tag": "0013_striped_infant_terrible",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1784233077644,
+      "tag": "0014_supreme_vapor",
+      "breakpoints": true
     }
   ]
 }

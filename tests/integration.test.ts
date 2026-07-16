@@ -35,10 +35,14 @@ import {
   setTaskMode,
 } from "@/lib/conversation";
 import {
+  applyPlan,
   claimNextRun,
   enqueueRun,
   finishRun,
+  getRunFresh,
+  listRunsForTask,
   runHealth,
+  touchRun,
 } from "@/lib/runs";
 import { processRun } from "@/lib/worker";
 import {
@@ -231,6 +235,132 @@ describe("runs autonomes & garde-fous", () => {
     });
     expect(final.stopReason).toBe("project_budget");
     expect(steps).toBe(0);
+  });
+
+  it("plafond 0 laisse tourner un run gratuit (0 ≠ plafond atteint)", async () => {
+    const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
+    const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;
+
+    // Le défaut : « ne rien dépenser ». Le run doit aller au bout, pas s'arrêter
+    // immédiatement sur `spent >= max`.
+    await enqueueRun(userId, taskId, { goal: "g", maxIterations: 2, maxCostUsd: 0 });
+    const claimed = await claimNextRun(new Date());
+    expect(claimed?.maxCostUsd).toBe(0);
+
+    let steps = 0;
+    const final = await processRun(claimed!, {
+      stepFn: async () => {
+        steps++;
+        return { done: steps === 2, note: "n", costUsd: 0 };
+      },
+    });
+    expect(steps).toBe(2);
+    expect(final.stopReason).toBe("completed");
+  });
+
+  it("plafond 0 : une dépense imprévue arrête le run", async () => {
+    const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
+    const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;
+
+    await enqueueRun(userId, taskId, { goal: "g", maxIterations: 5, maxCostUsd: 0 });
+    const claimed = await claimNextRun(new Date());
+    const final = await processRun(claimed!, {
+      stepFn: async () => ({ done: false, note: "n", costUsd: 0.01 }),
+    });
+    expect(final.stopReason).toBe("budget");
+    expect(final.iterations).toBe(1);
+  });
+
+  it("mise en file sans moteur ni limites : tout reste à planifier", async () => {
+    const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
+    const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;
+
+    const rid = await enqueueRun(userId, taskId, { goal: "g" });
+    const [run] = await listRunsForTask(userId, taskId);
+    expect(run?.id).toBe(rid);
+    expect(run?.engine).toBe("auto");
+    expect(run?.maxIterations).toBeNull();
+    expect(run?.timeoutMin).toBeNull();
+    expect(run?.maxCostUsd).toBe(0);
+    expect(run?.plannedLevel).toBeNull();
+
+    // applyPlan fige le plan et arme le timeout à partir de MAINTENANT, pas de
+    // la mise en file.
+    const now = new Date("2026-07-16T12:00:00Z");
+    await applyPlan(
+      rid,
+      {
+        engine: "llm",
+        plannedLevel: 2,
+        planReason: "r",
+        planner: "ai",
+        sourceKind: "free",
+        sourceLabel: "Gratuit — opencode/big-pickle",
+        maxIterations: 4,
+        timeoutMin: 10,
+      },
+      now,
+    );
+    const planned = await getRunFresh(rid);
+    expect(planned?.engine).toBe("llm");
+    expect(planned?.maxIterations).toBe(4);
+    expect(planned?.plannedLevel).toBe(2);
+    expect(planned?.sourceKind).toBe("free");
+    expect(planned?.timeoutAt?.getTime()).toBe(now.getTime() + 10 * 60_000);
+  });
+
+  it("le battement de verrou empêche un second worker de reprendre un run vivant", async () => {
+    const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
+    const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;
+    await enqueueRun(userId, taskId, { goal: "long", maxIterations: 5, maxCostUsd: 0 });
+
+    const claimed = await claimNextRun(new Date());
+    expect(claimed).not.toBeNull();
+
+    // Sans battement, une étape longue (agent CLI : plusieurs minutes) laisse le
+    // verrou pourrir, et un second worker relance le MÊME run en parallèle.
+    const stolen = await claimNextRun(new Date(Date.now() + 5 * 60_000));
+    expect(stolen?.id).toBe(claimed!.id);
+
+    // Le battement repousse le verrou : le run reste hors de la fenêtre de
+    // reprise tant qu'il bat.
+    await touchRun(claimed!.id);
+    expect(await claimNextRun(new Date(Date.now() + 30_000))).toBeNull();
+  });
+
+  it("un run non planifié ne boucle pas indéfiniment", async () => {
+    const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
+    const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;
+
+    await enqueueRun(userId, taskId, { goal: "g" });
+    const claimed = await claimNextRun(new Date());
+    let steps = 0;
+    const final = await processRun(claimed!, {
+      stepFn: async () => {
+        steps++;
+        return { done: false, note: "n", costUsd: 0 };
+      },
+    });
+    // Sans limites, la boucle n'a aucune borne : elle doit refuser de démarrer.
+    expect(steps).toBe(0);
+    expect(final.status).toBe("failed");
+    expect(final.stopReason).toBe("error");
+  });
+});
+
+describe("profil : ordre des sources", () => {
+  it("répare un ordre partiel ou corrompu et le persiste", async () => {
+    await upsertProfile(userId, { sourceOrder: ["subscription"] });
+    const p = await getProfile(userId);
+    // Complété dans l'ordre par défaut, sans jamais amputer la liste.
+    expect(p.sourceOrder).toEqual(["subscription", "local", "free"]);
+
+    await upsertProfile(userId, {});
+    expect((await getProfile(userId)).sourceOrder).toEqual([
+      "local",
+      "subscription",
+      "free",
+    ]);
   });
 });
 

@@ -12,6 +12,12 @@ import { eq } from "drizzle-orm";
 import { db } from "@/lib/db";
 import type { Provider } from "@/lib/models";
 import type { ProjectType } from "@/lib/architect";
+import {
+  DEFAULT_SOURCE_ORDER,
+  parseSourceOrder,
+  serializeSourceOrder,
+  type OrderedSourceKind,
+} from "@/lib/sources";
 import { profiles } from "@/drizzle/schema";
 
 export interface Profile {
@@ -21,6 +27,11 @@ export interface Profile {
   defaultProjectType: ProjectType;
   preferredProvider: Provider | null;
   defaultBudgetUsd: number | null;
+  /**
+   * Ordre de préférence des sources du routage autonome. Toujours complet et
+   * valide (cf. `parseSourceOrder`), même si la colonne est vide ou corrompue.
+   */
+  sourceOrder: OrderedSourceKind[];
 }
 
 const DEFAULT_PROFILE: Profile = {
@@ -30,6 +41,7 @@ const DEFAULT_PROFILE: Profile = {
   defaultProjectType: "tech",
   preferredProvider: null,
   defaultBudgetUsd: null,
+  sourceOrder: [...DEFAULT_SOURCE_ORDER],
 };
 
 export async function getProfile(userId: string): Promise<Profile> {
@@ -47,6 +59,7 @@ export async function getProfile(userId: string): Promise<Profile> {
     preferredProvider: (row.preferredProvider as Provider) ?? null,
     defaultBudgetUsd:
       row.defaultBudgetUsd != null ? Number(row.defaultBudgetUsd) : null,
+    sourceOrder: parseSourceOrder(row.sourceOrder),
   };
 }
 
@@ -57,6 +70,7 @@ export interface ProfilePatch {
   defaultProjectType?: ProjectType;
   preferredProvider?: Provider | null;
   defaultBudgetUsd?: number | null;
+  sourceOrder?: readonly OrderedSourceKind[];
 }
 
 export async function upsertProfile(
@@ -74,6 +88,9 @@ export async function upsertProfile(
       patch.defaultBudgetUsd != null && patch.defaultBudgetUsd > 0
         ? patch.defaultBudgetUsd.toFixed(4)
         : null,
+    sourceOrder: serializeSourceOrder(
+      patch.sourceOrder ?? DEFAULT_SOURCE_ORDER,
+    ),
   };
   await db
     .insert(profiles)

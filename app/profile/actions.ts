@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 
 import { upsertProfile } from "@/lib/profile";
+import { parseSourceOrder } from "@/lib/sources";
 import { getCurrentUserId } from "@/lib/users";
 import type { Provider } from "@/lib/models";
 import type { ProjectType } from "@/lib/architect";
@@ -44,6 +45,9 @@ export async function saveProfileAction(
         ? (rawProvider as Provider)
         : null,
       defaultBudgetUsd: rawBudget === "" ? null : Number(rawBudget),
+      // Les trois selects portent le même nom : `parseSourceOrder` écarte les
+      // doublons (deux fois « Local ») et complète les sources omises.
+      sourceOrder: parseSourceOrder(formData.getAll("sourceOrder").join(",")),
     });
     revalidatePath("/profile");
     return { ok: true, message: "Profil enregistré." };
