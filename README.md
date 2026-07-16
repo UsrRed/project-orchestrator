@@ -114,6 +114,13 @@ Un **modèle local** (LM Studio / Ollama, OpenAI-compatible via `LOCAL_AI_BASE_U
 
 Puis il sélectionne le meilleur provider **disponible** (clé fournie) selon un ordre de préférence par tier, exécute l'appel via l'AI SDK, et calcule le **coût réel** (tarification dans `lib/models.ts`) destiné à être journalisé dans la table `agent_executions` — la table de vérité du suivi budgétaire.
 
+## Authentification (M7.2)
+
+Auth.js v5 + **GitHub OAuth** (adapter Drizzle) : config Edge-safe ([auth.config.ts](auth.config.ts)) + config Node avec adapter ([auth.ts](auth.ts)), middleware de protection ([middleware.ts](middleware.ts)), page `/signin`. Tout le code étant scopé par `userId`, seul `getCurrentUserId()` ([lib/users.ts](lib/users.ts)) lit la session.
+
+- **Production** : `AUTH_SECRET`, `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET` requis ; callback OAuth = `<origin>/api/auth/callback/github`. Les non-authentifiés sont redirigés vers `/signin`.
+- **Développement** : `ALLOW_DEV_USER="true"` (ou `NODE_ENV !== 'production'`) ouvre l'accès et utilise un **utilisateur local** — pratique pour le dev et les scripts/worker (hors contexte requête).
+
 ## Scripts
 
 | Script | Rôle |
