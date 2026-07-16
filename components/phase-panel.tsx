@@ -5,6 +5,8 @@
  * méthodologiques adaptés. Le mapping est fixe et whitelisté (pas de contenu
  * exécutable), il oriente simplement l'UI selon la nature de la phase.
  */
+import { panelKeyFor } from "@/lib/phase-panel";
+
 interface PanelSpec {
   label: string;
   accent: string;
@@ -44,22 +46,6 @@ const DEFAULT_PANEL: PanelSpec = {
   accent: "text-neutral-300 border-neutral-800 bg-neutral-900/40",
   focus: ["Objectifs de la phase", "Livrables attendus", "Points de vigilance"],
 };
-
-/** Normalise un type de phase libre vers une clé de panneau connue. */
-export function panelKeyFor(phaseType: string | null): string {
-  if (!phaseType) return "default";
-  // Minuscule + suppression des accents pour un matching robuste.
-  const t = phaseType
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "");
-  if (t.includes("recherch") || t.includes("cadrage")) return "recherche";
-  if (t.includes("design") || t.includes("ux") || t.includes("ui")) return "design";
-  if (t.includes("dev") || t.includes("code") || t.includes("techn")) return "developpement";
-  if (t.includes("market") || t.includes("comm")) return "marketing";
-  if (t.includes("lancement") || t.includes("launch") || t.includes("release")) return "lancement";
-  return "default";
-}
 
 export function PhasePanel({
   phaseName,

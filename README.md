@@ -138,14 +138,23 @@ Auth.js v5 + **GitHub OAuth** (adapter Drizzle) : config Edge-safe ([auth.config
 | `npm run build` | Build de production |
 | `npm run typecheck` | `tsc --noEmit` |
 | `npm run lint` | ESLint (config Next) |
+| `npm test` | Suite de tests (vitest : unitaires + intégration DB) |
 | `npm run worker` | Worker du mode Autonome (draine la queue en arrière-plan) |
 | `npm run db:generate` | Génère les migrations SQL depuis le schéma |
 | `npm run db:migrate` | Applique les migrations (non-interactif) |
 | `npm run db:studio` | Explorateur de base Drizzle |
 
+## Tests
+
+**vitest** ([vitest.config.ts](vitest.config.ts)) :
+- `tests/unit.test.ts` — sans base : crypto, routeur & fiabilité (fallback, circuit-breaker, rate-limit, timeout), parsing de widgets (anti-XSS), mapping de panneau.
+- `tests/integration.test.ts` — contre un Postgres réel : clés chiffrées, arborescence de projet & édition, conversation/Cowork, normes, runs autonomes & garde-fous (dont `project_budget`), budgets, config OAuth chiffrée.
+
+Lancer : `npm test` (charge `.env` ; nécessite le Postgres de dev migré).
+
 ## CI
 
-`.github/workflows/ci.yml` exécute lint + typecheck + build sur chaque push/PR vers `main`.
+`.github/workflows/ci.yml` : job **build** (lint + typecheck + build) et job **test** (service Postgres → `db:migrate` → `npm test`) sur chaque push/PR vers `main`.
 
 ## Mode Autonome — comment ça tourne
 
