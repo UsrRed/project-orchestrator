@@ -114,6 +114,10 @@ Un **modèle local** (LM Studio / Ollama, OpenAI-compatible via `LOCAL_AI_BASE_U
 
 Puis il sélectionne le meilleur provider **disponible** (clé fournie) selon un ordre de préférence par tier, exécute l'appel via l'AI SDK, et calcule le **coût réel** (tarification dans `lib/models.ts`) destiné à être journalisé dans la table `agent_executions` — la table de vérité du suivi budgétaire.
 
+## Observabilité (M7.4)
+
+Logs **structurés** (JSON : level/event/contexte) via [lib/observability.ts](lib/observability.ts) ; les échecs d'exécutions et de runs sont journalisés et **remontés à Sentry si `SENTRY_DSN` est défini** (sinon no-op, l'app tourne sans compte Sentry — init dans [instrumentation.ts](instrumentation.ts)). Un tableau de bord **`/health`** montre le taux d'échec des exécutions, le coût total, la répartition des runs par statut et les derniers incidents.
+
 ## Budgets & alertes (M7.3)
 
 Chaque exécution LLM est rattachée à son projet (`agent_executions.project_id`). Sur la page projet, un **budget** (`limitUsd`) peut être fixé : le montant dépensé est calculé en direct depuis la table de vérité, avec **alerte à 80 %** et **blocage à 100 %** — les appels IA (chat, Cowork, widget) et le **lancement de runs autonomes** sont refusés au dépassement, et un run en cours s'arrête avec la raison `project_budget`. Service : [lib/budgets.ts](lib/budgets.ts).

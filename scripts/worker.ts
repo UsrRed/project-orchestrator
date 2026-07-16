@@ -39,6 +39,7 @@ async function main(): Promise<void> {
   const { processRun } = await import("@/lib/worker");
   const { makeAutonomousDeps } = await import("@/lib/autonomous-agent");
   const { getDecryptedProviderKeys } = await import("@/lib/keys");
+  const { captureException } = await import("@/lib/observability");
 
   console.log("[worker] démarré — polling de la queue autonomous_runs…");
 
@@ -86,6 +87,7 @@ async function main(): Promise<void> {
         "error",
         err instanceof Error ? err.message : String(err),
       );
+      await captureException(err, "worker.run_error", { runId: claimed.id });
       console.error(`[worker] run ${claimed.id} → erreur :`, err);
     }
   }

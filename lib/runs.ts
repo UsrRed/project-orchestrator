@@ -236,3 +236,45 @@ export async function listRunsForTask(
     .orderBy(desc(autonomousRuns.createdAt));
   return rows.map(mapRow);
 }
+
+export type RunHealth = Record<RunStatus, number> & { total: number };
+
+/** Répartition des runs par statut (observabilité). */
+export async function runHealth(userId: string): Promise<RunHealth> {
+  const rows = await db
+    .select({
+      status: autonomousRuns.status,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(autonomousRuns)
+    .where(eq(autonomousRuns.userId, userId))
+    .groupBy(autonomousRuns.status);
+
+  const health: RunHealth = {
+    queued: 0,
+    running: 0,
+    succeeded: 0,
+    failed: 0,
+    cancelled: 0,
+    total: 0,
+  };
+  for (const r of rows) {
+    health[r.status as RunStatus] = r.count;
+    health.total += r.count;
+  }
+  return health;
+}
+
+/** Derniers runs de l'utilisateur (tous statuts confondus). */
+export async function listRecentRuns(
+  userId: string,
+  limit = 10,
+): Promise<RunRow[]> {
+  const rows = await db
+    .select()
+    .from(autonomousRuns)
+    .where(eq(autonomousRuns.userId, userId))
+    .orderBy(desc(autonomousRuns.createdAt))
+    .limit(limit);
+  return rows.map(mapRow);
+}

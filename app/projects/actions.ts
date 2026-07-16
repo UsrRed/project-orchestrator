@@ -15,6 +15,7 @@ import {
   dissociateNorme,
 } from "@/lib/normes";
 import { setBudget } from "@/lib/budgets";
+import { captureException } from "@/lib/observability";
 import { getCurrentUserId } from "@/lib/users";
 import {
   addPhase,
@@ -94,6 +95,7 @@ export async function generateProjectAction(
       finishedAt: new Date(),
     });
   } catch (err) {
+    await captureException(err, "architect.failed", { userId, type });
     return {
       ok: false,
       message:

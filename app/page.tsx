@@ -119,8 +119,11 @@ export default async function Home() {
         </ul>
       </section>
 
-      <footer className="text-xs text-neutral-600">
-        Clés chiffrées hors-ligne · coût réel journalisé · routage multi-provider
+      <footer className="flex items-center justify-between text-xs text-neutral-600">
+        <span>Clés chiffrées · coût réel journalisé · routage multi-provider</span>
+        <Link href="/health" className="hover:text-neutral-300">
+          Santé →
+        </Link>
       </footer>
     </main>
   );

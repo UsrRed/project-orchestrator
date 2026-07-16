@@ -11,6 +11,7 @@ import { desc, eq, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import type { Provider, Tier } from "@/lib/models";
+import { logWarn } from "@/lib/observability";
 import { agentExecutions } from "@/drizzle/schema";
 
 export interface RecordExecutionInput {
@@ -53,6 +54,18 @@ export async function recordExecution(
     startedAt: input.startedAt,
     finishedAt: input.finishedAt,
   });
+
+  if (input.status === "failed") {
+    logWarn("execution.failed", {
+      userId: input.userId,
+      projectId: input.projectId,
+      provider: input.provider,
+      model: input.model,
+      tier: input.tier,
+      label: input.taskLabel,
+      error: input.error,
+    });
+  }
 }
 
 /** Coût total réel dépensé sur un projet (somme des exécutions). */
@@ -91,6 +104,66 @@ export async function listExecutions(
     .orderBy(desc(agentExecutions.createdAt))
     .limit(limit);
 
+  return rows.map((r) => ({
+    id: r.id,
+    taskLabel: r.taskLabel,
+    provider: r.provider,
+    model: r.model,
+    tier: r.tier,
+    status: r.status,
+    promptTokens: r.promptTokens,
+    completionTokens: r.completionTokens,
+    costUsd: Number(r.costUsd),
+    createdAt: r.createdAt,
+  }));
+}
+
+export interface ExecutionHealth {
+  total: number;
+  failed: number;
+  succeeded: number;
+  failureRate: number;
+  totalCostUsd: number;
+}
+
+/** Santé des exécutions : total, échecs, taux d'échec, coût. */
+export async function executionHealth(
+  userId: string,
+): Promise<ExecutionHealth> {
+  const [row] = await db
+    .select({
+      total: sql<number>`count(*)::int`,
+      failed: sql<number>`count(*) filter (where ${agentExecutions.status} = 'failed')::int`,
+      succeeded: sql<number>`count(*) filter (where ${agentExecutions.status} = 'succeeded')::int`,
+      totalCostUsd: sql<string>`coalesce(sum(${agentExecutions.costUsd}), 0)`,
+    })
+    .from(agentExecutions)
+    .where(eq(agentExecutions.userId, userId));
+
+  const total = row?.total ?? 0;
+  const failed = row?.failed ?? 0;
+  return {
+    total,
+    failed,
+    succeeded: row?.succeeded ?? 0,
+    failureRate: total > 0 ? failed / total : 0,
+    totalCostUsd: Number(row?.totalCostUsd ?? 0),
+  };
+}
+
+/** Dernières exécutions en échec (observabilité). */
+export async function listFailedExecutions(
+  userId: string,
+  limit = 10,
+): Promise<ExecutionView[]> {
+  const rows = await db
+    .select()
+    .from(agentExecutions)
+    .where(
+      sql`${agentExecutions.userId} = ${userId} and ${agentExecutions.status} = 'failed'`,
+    )
+    .orderBy(desc(agentExecutions.createdAt))
+    .limit(limit);
   return rows.map((r) => ({
     id: r.id,
     taskLabel: r.taskLabel,

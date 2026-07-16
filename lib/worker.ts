@@ -18,6 +18,7 @@ import {
   recordIteration,
   type RunRow,
 } from "@/lib/runs";
+import { captureException, logInfo } from "@/lib/observability";
 
 export interface StepContext {
   runId: string;
@@ -122,6 +123,11 @@ export async function processRun(
         fresh,
       );
     } catch (err) {
+      await captureException(err, "run.step_failed", {
+        runId,
+        taskId: fresh.taskId,
+        iteration: fresh.iterations,
+      });
       await finishRun(
         runId,
         "failed",
@@ -159,7 +165,15 @@ export async function processRun(
     }
   }
 
-  return (await getRunFresh(runId)) as RunRow;
+  const done = (await getRunFresh(runId)) as RunRow;
+  logInfo("run.finished", {
+    runId,
+    status: done.status,
+    stopReason: done.stopReason,
+    iterations: done.iterations,
+    spentUsd: done.spentUsd,
+  });
+  return done;
 }
 
 /** Réclame et traite le prochain run de la file. Renvoie null si file vide. */
