@@ -269,6 +269,13 @@ est transmise — l'environnement est filtré par une allowlist, précisément p
 qu'une `ANTHROPIC_API_KEY` traînant dans le `.env` ne fasse pas basculer Claude
 Code sur la facturation à la clé.
 
+`/models` les liste sous « Abonnements — agents CLI », à part des providers :
+un agent CLI **n'est pas routable**, le mélanger aux providers laisserait croire
+que le chat ou l'architecte peuvent s'en servir. « Détecté » y signifie
+**binaire présent**, pas « authentifié » — le vérifier demanderait de lancer
+l'agent (coûteux) ou de lire ses credentials (hors de question) ; un login
+expiré ne se voit donc qu'au premier run.
+
 État constaté des trois agents (machine de dev, 2026-07-16) :
 
 | CLI | État | Coût remonté |

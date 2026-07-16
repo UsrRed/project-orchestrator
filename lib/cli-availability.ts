@@ -34,16 +34,25 @@ export function isBinOnPath(bin: string): boolean {
 export interface CliAgentStatus {
   id: CliAgentId;
   label: string;
+  /** Binaire attendu dans le PATH. */
+  bin: string;
   available: boolean;
   reportsCost: boolean;
-  /** Raison d'indisponibilité, ou limite connue à afficher à l'utilisateur. */
+  /** Renseigné **uniquement** si indisponible : pourquoi. */
   warning?: string;
+  /** Description permanente (mode d'authentification, limites connues). */
+  note?: string;
 }
 
 /**
  * État de chaque agent CLI pour l'UI. Un CLI installé mais avec un problème
  * connu (`knownIssue`) est marqué **indisponible** : mieux vaut le griser avec
  * la raison que laisser l'utilisateur lancer un run voué à échouer.
+ *
+ * ⚠️ « available » signifie **binaire présent**, pas « authentifié » : le vérifier
+ * demanderait de lancer le CLI (coûteux) ou de lire ses credentials (hors de
+ * question). Un agent connecté nulle part apparaîtra donc disponible et son
+ * premier run échouera avec le message du CLI.
  */
 export function cliAgentStatuses(): CliAgentStatus[] {
   return CLI_AGENTS.map((c) => {
@@ -51,11 +60,13 @@ export function cliAgentStatuses(): CliAgentStatus[] {
     return {
       id: c.id,
       label: c.label,
+      bin: c.bin,
       available: onPath && !c.knownIssue,
       reportsCost: c.reportsCost,
       warning: !onPath
         ? `Binaire \`${c.bin}\` introuvable dans le PATH.`
-        : (c.knownIssue ?? (c.reportsCost ? undefined : c.note)),
+        : c.knownIssue,
+      note: c.note,
     };
   });
 }

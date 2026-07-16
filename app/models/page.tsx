@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { deleteConnectionAction } from "@/app/actions";
+import { cliAgentStatuses, type CliAgentStatus } from "@/lib/cli-availability";
 import {
   assessLevel,
   LEVEL_HINT,
@@ -162,6 +163,7 @@ export default async function ModelsPage() {
 
   const reachable = cards.filter((c) => c.reachable);
   const others = cards.filter((c) => !c.reachable);
+  const cliAgents = cliAgentStatuses();
 
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-8 px-6 py-16">
@@ -171,10 +173,12 @@ export default async function ModelsPage() {
         </Link>
         <h1 className="text-4xl font-bold tracking-tight">Modèles</h1>
         <p className="text-sm text-neutral-400">
-          Ce que le routeur peut <strong>réellement</strong> utiliser d&apos;après
-          tes connexions. Catalogue{" "}
-          <strong>models.dev</strong> (coûts USD / 1M tokens), filtré des modèles
-          retirés, non textuels et des embeddings.
+          Ce que tu peux <strong>réellement</strong> utiliser. Deux voies
+          distinctes : les <strong>providers</strong> (clé API, alimentent le
+          routeur) et les <strong>agents CLI</strong> (ton abonnement, sans clé,
+          pour les runs autonomes). Catalogue <strong>models.dev</strong> (coûts
+          USD / 1M tokens), filtré des modèles retirés, non textuels et des
+          embeddings.
         </p>
         <p className="text-sm text-neutral-400">
           Chaque modèle porte un <strong>niveau d&apos;intelligence</strong>. Le
@@ -217,6 +221,8 @@ export default async function ModelsPage() {
         )}
       </section>
 
+      <CliAgentsSection agents={cliAgents} />
+
       {others.length > 0 && (
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold text-neutral-500">
@@ -235,6 +241,88 @@ export default async function ModelsPage() {
         </section>
       )}
     </main>
+  );
+}
+
+/**
+ * Agents CLI : la seconde façon d'utiliser un modèle dans l'app, et la seule
+ * qui passe par un **abonnement** plutôt que par une clé API.
+ *
+ * Section distincte des providers, et pas par goût du rangement : un agent CLI
+ * n'est pas routable. Le mélanger aux providers laisserait croire que le chat
+ * ou l'architecte peuvent s'en servir — ils ne le peuvent pas.
+ */
+function CliAgentsSection({ agents }: { agents: CliAgentStatus[] }) {
+  const ready = agents.filter((a) => a.available).length;
+
+  return (
+    <section className="flex flex-col gap-3">
+      <h2 className="text-sm font-semibold text-neutral-200">
+        Abonnements — agents CLI{" "}
+        <span className="text-neutral-500">— {ready} disponible{ready > 1 ? "s" : ""}</span>
+      </h2>
+      <p className="text-xs text-neutral-500">
+        Ces agents s&apos;authentifient avec <strong>leur propre login</strong> sur
+        la machine du worker : aucune clé API de l&apos;app, rien à connecter ici.
+        Ils exécutent les <strong>runs autonomes</strong> (moteur{" "}
+        <code>cli</code>, à choisir depuis une tâche) et travaillent directement
+        dans les fichiers du projet. Ils{" "}
+        <strong>n&apos;alimentent pas le routeur</strong> : le chat, l&apos;architecte
+        et les widgets passent par les providers ci-dessus.
+      </p>
+
+      <ul className="flex flex-col gap-2">
+        {agents.map((a) => (
+          <li
+            key={a.id}
+            className={`flex flex-col gap-1 rounded-xl border p-3 ${
+              a.available
+                ? "border-neutral-800 bg-neutral-900/40"
+                : "border-neutral-900 bg-neutral-950/40 opacity-60"
+            }`}
+          >
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span
+                className={a.available ? "font-semibold" : "font-semibold text-neutral-500"}
+              >
+                {a.label}
+              </span>
+              <code className="text-xs text-neutral-600">{a.bin}</code>
+              {a.available ? (
+                <span className="rounded bg-emerald-950/60 px-1.5 py-0.5 text-[10px] text-emerald-400">
+                  détecté
+                </span>
+              ) : (
+                <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-500">
+                  indisponible
+                </span>
+              )}
+              <span className="rounded bg-sky-950/60 px-1.5 py-0.5 text-[10px] text-sky-300">
+                abonnement · sans clé
+              </span>
+              {!a.reportsCost && a.available && (
+                <span
+                  className="rounded bg-amber-950/60 px-1.5 py-0.5 text-[10px] text-amber-300"
+                  title="Le plafond de coût d'un run ne le limitera pas : seuls les itérations et le timeout le bornent."
+                >
+                  coût non remonté
+                </span>
+              )}
+            </div>
+            {a.warning && (
+              <p className="text-xs text-amber-300/80">{a.warning}</p>
+            )}
+            {a.note && <p className="text-xs text-neutral-500">{a.note}</p>}
+          </li>
+        ))}
+      </ul>
+
+      <p className="text-xs text-neutral-600">
+        « Détecté » signifie <strong>binaire présent</strong>, pas
+        « authentifié » : le vérifier demanderait de lancer l&apos;agent. Si son
+        login a expiré, le premier run échouera avec le message du CLI.
+      </p>
+    </section>
   );
 }
 
