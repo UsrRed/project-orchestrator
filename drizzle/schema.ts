@@ -39,6 +39,9 @@ export const providerEnum = pgEnum("provider", [
 
 export const projectTypeEnum = pgEnum("project_type", ["tech", "marketing"]);
 
+/** Rattachement d'un projet à un dépôt Git : aucun (local) ou dépôt GitHub. */
+export const repoModeEnum = pgEnum("repo_mode", ["local", "github"]);
+
 export const phaseStatusEnum = pgEnum("phase_status", [
   "pending",
   "in_progress",
@@ -208,6 +211,13 @@ export const projects = pgTable("projects", {
   idea: text("idea"),
   type: projectTypeEnum("type").notNull().default("tech"),
   budgetLimitUsd: numeric("budget_limit_usd", { precision: 12, scale: 4 }),
+  // --- Rattachement Git (M7) ---
+  repoMode: repoModeEnum("repo_mode").notNull().default("local"),
+  /** `owner/repo` du dépôt lié (null en mode local). */
+  repoFullName: text("repo_full_name"),
+  repoUrl: text("repo_url"),
+  /** Visibilité connue du dépôt lié — privé par défaut à la création. */
+  repoPrivate: boolean("repo_private").notNull().default(true),
   ...timestamps,
 });
 

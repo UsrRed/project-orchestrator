@@ -10,6 +10,15 @@ import {
   type ProjectType,
 } from "@/lib/architect";
 import { assertWithinBudget } from "@/lib/budgets";
+import {
+  canManageRepos,
+  createUserRepo,
+  getGitHubAccess,
+  getRepo,
+  parseRepoInput,
+  repoUrlFor,
+  slugifyRepoName,
+} from "@/lib/github";
 import { getProviderConnections } from "@/lib/keys";
 import { recordExecution } from "@/lib/executions";
 import {
@@ -33,7 +42,9 @@ import {
   replaceProjectTree,
   updatePhase,
   updateTask,
+  LOCAL_REPO,
   type PhaseStatus,
+  type ProjectRepo,
   type TaskMode,
   type TaskStatus,
 } from "@/lib/projects";
@@ -49,6 +60,84 @@ const VALID_TYPES: ReadonlySet<string> = new Set<ProjectType>([
   "tech",
   "marketing",
 ]);
+
+// --- Rattachement Git du projet ------------------------------------------
+
+/** Choix offert à la création : lier un dépôt, en créer un, ou rester local. */
+type RepoChoice = "link" | "create" | "local";
+
+const VALID_REPO_CHOICES: ReadonlySet<string> = new Set<RepoChoice>([
+  "link",
+  "create",
+  "local",
+]);
+
+/**
+ * Résout le rattachement Git demandé dans le formulaire : valide le dépôt à
+ * lier, ou **crée** le dépôt (privé sauf demande explicite) sur le compte
+ * GitHub de l'utilisateur. Appelé AVANT la génération pour échouer tôt, sans
+ * dépenser de tokens. Lève une erreur au message affichable.
+ */
+async function resolveRepoChoice(
+  userId: string,
+  formData: FormData,
+  idea: string,
+): Promise<ProjectRepo> {
+  const raw = String(formData.get("repoChoice") ?? "local");
+  const choice = (VALID_REPO_CHOICES.has(raw) ? raw : "local") as RepoChoice;
+  if (choice === "local") return LOCAL_REPO;
+
+  const access = await getGitHubAccess(userId);
+
+  if (choice === "link") {
+    const fullName = parseRepoInput(String(formData.get("repoInput") ?? ""));
+    if (!fullName) {
+      throw new Error(
+        "Dépôt invalide. Attendu : une URL GitHub ou « proprietaire/depot ».",
+      );
+    }
+    // Avec le scope `repo` on vérifie l'existence et la visibilité réelle ;
+    // sinon on enregistre le lien tel quel, en supposant le dépôt privé (on ne
+    // prétend pas public ce qu'on n'a pas pu vérifier).
+    if (access && canManageRepos(access)) {
+      const repo = await getRepo(access.token, fullName);
+      return { mode: "github", fullName: repo.fullName, url: repo.url, private: repo.private };
+    }
+    return {
+      mode: "github",
+      fullName,
+      url: repoUrlFor(fullName),
+      private: true,
+    };
+  }
+
+  // choice === "create"
+  if (!access) {
+    throw new Error(
+      "Aucun compte GitHub lié. Connecte-toi via GitHub pour créer un dépôt.",
+    );
+  }
+  if (!canManageRepos(access)) {
+    throw new Error(
+      "Ton accès GitHub ne couvre pas la gestion des dépôts. Déconnecte-toi puis reconnecte-toi pour accorder l'accès, ou lie un dépôt existant par son URL.",
+    );
+  }
+
+  const name = slugifyRepoName(
+    String(formData.get("repoName") ?? "").trim() || idea,
+  );
+  const isPrivate = String(formData.get("repoVisibility") ?? "private") !== "public";
+  const repo = await createUserRepo(access.token, name, {
+    private: isPrivate,
+    description: idea,
+  });
+  return {
+    mode: "github",
+    fullName: repo.fullName,
+    url: repo.url,
+    private: repo.private,
+  };
+}
 
 /**
  * Génère une arborescence à partir d'une idée, la persiste, journalise le coût,
@@ -74,6 +163,18 @@ export async function generateProjectAction(
     };
   }
 
+  // Dépôt d'abord : une erreur ici (URL invalide, accès manquant) doit revenir
+  // dans le formulaire sans avoir dépensé un seul token.
+  let repo: ProjectRepo;
+  try {
+    repo = await resolveRepoChoice(userId, formData, idea);
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : "Rattachement Git impossible.",
+    };
+  }
+
   const profile = await getProfile(userId);
   let projectId: string;
   const startedAt = new Date();
@@ -89,6 +190,7 @@ export async function generateProjectAction(
       idea,
       type,
       result.architecture,
+      repo,
     );
     // Auto-association des normes dont la catégorie ↔ type de phase (M5).
     await autoAssociateProjectNorms(userId, projectId);
@@ -112,12 +214,18 @@ export async function generateProjectAction(
     });
   } catch (err) {
     await captureException(err, "architect.failed", { userId, type });
+    const base =
+      err instanceof Error
+        ? `Échec de génération : ${err.message}`
+        : "Échec de génération.";
+    // Le dépôt a pu être créé juste avant : le dire plutôt que laisser
+    // l'utilisateur découvrir un dépôt orphelin sur son compte.
+    const created = repo.mode === "github" && repo.fullName;
     return {
       ok: false,
-      message:
-        err instanceof Error
-          ? `Échec de génération : ${err.message}`
-          : "Échec de génération.",
+      message: created
+        ? `${base} (Le dépôt ${repo.fullName} est en place — relance la génération, il sera réutilisé en le liant.)`
+        : base,
     };
   }
 

@@ -17,6 +17,25 @@ export type TaskStatus = "todo" | "in_progress" | "blocked" | "done";
 export type TaskMode = "autonomous" | "cowork" | "manual";
 export type PhaseStatus = "pending" | "in_progress" | "done";
 
+/** Rattachement Git d'un projet : `local` = aucun dépôt, `github` = dépôt lié. */
+export type RepoMode = "local" | "github";
+
+export interface ProjectRepo {
+  mode: RepoMode;
+  /** `owner/repo` (null en local). */
+  fullName: string | null;
+  url: string | null;
+  private: boolean;
+}
+
+/** Rattachement local (aucun dépôt) — valeur par défaut d'un projet. */
+export const LOCAL_REPO: ProjectRepo = {
+  mode: "local",
+  fullName: null,
+  url: null,
+  private: true,
+};
+
 // --- Création depuis l'architecte ---------------------------------------
 
 /** Insère projet + phases + tâches de façon transactionnelle. Renvoie l'id projet. */
@@ -25,11 +44,21 @@ export async function createProjectFromArchitecture(
   idea: string,
   type: ProjectType,
   arch: Architecture,
+  repo: ProjectRepo = LOCAL_REPO,
 ): Promise<string> {
   return db.transaction(async (tx) => {
     const [project] = await tx
       .insert(projects)
-      .values({ userId, name: arch.projectName, idea, type })
+      .values({
+        userId,
+        name: arch.projectName,
+        idea,
+        type,
+        repoMode: repo.mode,
+        repoFullName: repo.fullName,
+        repoUrl: repo.url,
+        repoPrivate: repo.private,
+      })
       .returning({ id: projects.id });
 
     if (!project) throw new Error("Échec de création du projet.");
@@ -117,6 +146,7 @@ export interface ProjectSummary {
   name: string;
   type: string;
   idea: string | null;
+  repo: ProjectRepo;
   phaseCount: number;
   taskCount: number;
   doneTaskCount: number;
@@ -131,6 +161,10 @@ export async function listProjects(userId: string): Promise<ProjectSummary[]> {
       type: projects.type,
       idea: projects.idea,
       createdAt: projects.createdAt,
+      repoMode: projects.repoMode,
+      repoFullName: projects.repoFullName,
+      repoUrl: projects.repoUrl,
+      repoPrivate: projects.repoPrivate,
       phaseCount: sql<number>`count(distinct ${phases.id})::int`,
       taskCount: sql<number>`count(${tasks.id})::int`,
       doneTaskCount: sql<number>`count(${tasks.id}) filter (where ${tasks.status} = 'done')::int`,
@@ -142,7 +176,15 @@ export async function listProjects(userId: string): Promise<ProjectSummary[]> {
     .groupBy(projects.id)
     .orderBy(sql`${projects.createdAt} desc`);
 
-  return rows;
+  return rows.map(({ repoMode, repoFullName, repoUrl, repoPrivate, ...p }) => ({
+    ...p,
+    repo: {
+      mode: repoMode,
+      fullName: repoFullName,
+      url: repoUrl,
+      private: repoPrivate,
+    },
+  }));
 }
 
 export interface TaskView {
@@ -168,6 +210,7 @@ export interface ProjectTree {
   name: string;
   type: string;
   idea: string | null;
+  repo: ProjectRepo;
   phases: PhaseView[];
 }
 
@@ -217,6 +260,12 @@ export async function getProjectTree(
     name: project.name,
     type: project.type,
     idea: project.idea,
+    repo: {
+      mode: project.repoMode,
+      fullName: project.repoFullName,
+      url: project.repoUrl,
+      private: project.repoPrivate,
+    },
     phases: phaseRows.map((p) => ({
       id: p.id,
       name: p.name,

@@ -32,7 +32,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth(async () => {
     }),
     session: { strategy: "jwt" },
     providers: gh
-      ? [GitHub({ clientId: gh.clientId, clientSecret: gh.clientSecret })]
+      ? [
+          GitHub({
+            clientId: gh.clientId,
+            clientSecret: gh.clientSecret,
+            // `repo` en plus des scopes par défaut : l'app propose de lier ou
+            // créer un dépôt (privé) pour un projet ([lib/github.ts](lib/github.ts)).
+            // Sans ce scope, seul le rattachement par URL manuelle est offert.
+            authorization: {
+              params: { scope: "read:user user:email repo" },
+            },
+          }),
+        ]
       : [],
   };
 });

@@ -6,6 +6,11 @@ import {
   runWithFallback,
   selectModelChain,
 } from "@/lib/llm-router";
+import {
+  canManageRepos,
+  parseRepoInput,
+  slugifyRepoName,
+} from "@/lib/github";
 import { currentUsage, resetRateLimits, tryAcquire } from "@/lib/rate-limit";
 import { parseWidget } from "@/lib/widgets";
 import { panelKeyFor } from "@/lib/phase-panel";
@@ -175,6 +180,44 @@ describe("widgets : parsing sécurisé", () => {
   it("rejette un JSON invalide / enum hors schéma", () => {
     expect(parseWidget("{pas json")).toBeNull();
     expect(parseWidget({ type: "callout", level: "danger", title: "t", body: "b" })).toBeNull();
+  });
+});
+
+describe("rattachement Git des projets", () => {
+  it("parseRepoInput : URL https, SSH, ou owner/repo", () => {
+    expect(parseRepoInput("https://github.com/UsrRed/mon-depot")).toBe(
+      "UsrRed/mon-depot",
+    );
+    expect(parseRepoInput("https://github.com/UsrRed/mon-depot.git/")).toBe(
+      "UsrRed/mon-depot",
+    );
+    expect(parseRepoInput("git@github.com:UsrRed/mon-depot.git")).toBe(
+      "UsrRed/mon-depot",
+    );
+    expect(parseRepoInput("UsrRed/mon-depot")).toBe("UsrRed/mon-depot");
+  });
+
+  it("parseRepoInput : rejette ce qui n'est pas un dépôt GitHub", () => {
+    expect(parseRepoInput("")).toBeNull();
+    expect(parseRepoInput("https://gitlab.com/moi/depot")).toBeNull();
+    // Chemin trop profond (pas un dépôt) ou caractères interdits.
+    expect(parseRepoInput("https://github.com/moi/depot/issues/1")).toBeNull();
+    expect(parseRepoInput("moi/dep ot")).toBeNull();
+    expect(parseRepoInput("../../etc/passwd")).toBeNull();
+  });
+
+  it("slugifyRepoName : nom de dépôt valide depuis du texte libre", () => {
+    expect(slugifyRepoName("Suivi d'habitudes — été 2026")).toBe(
+      "suivi-d-habitudes-ete-2026",
+    );
+    expect(slugifyRepoName("!!!")).toBe("projet");
+    expect(slugifyRepoName("a".repeat(200))).toHaveLength(90);
+  });
+
+  it("canManageRepos : exige le scope repo", () => {
+    expect(canManageRepos({ token: "t", scopes: ["read:user", "repo"] })).toBe(true);
+    expect(canManageRepos({ token: "t", scopes: ["read:user"] })).toBe(false);
+    expect(canManageRepos(null)).toBe(false);
   });
 });
 

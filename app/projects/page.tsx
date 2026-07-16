@@ -1,18 +1,39 @@
 import Link from "next/link";
 
+import {
+  canManageRepos,
+  getGitHubAccess,
+  listUserRepos,
+} from "@/lib/github";
 import { listProjects } from "@/lib/projects";
 import { getProfile } from "@/lib/profile";
 import { getCurrentUserId } from "@/lib/users";
-import { NewProjectForm } from "./new-project-form";
+import { NewProjectForm, type RepoOption } from "./new-project-form";
 
 export const dynamic = "force-dynamic";
 
 export default async function ProjectsPage() {
   const userId = await getCurrentUserId();
-  const [projects, profile] = await Promise.all([
+  const [projects, profile, access] = await Promise.all([
     listProjects(userId),
     getProfile(userId),
+    getGitHubAccess(userId),
   ]);
+
+  // Dépôts proposés à la liaison. GitHub peut être lent ou l'accès révoqué :
+  // l'échec ne doit pas casser la page, il retire juste les suggestions.
+  const manages = canManageRepos(access);
+  let repos: RepoOption[] = [];
+  if (access && manages) {
+    try {
+      repos = (await listUserRepos(access.token)).map((r) => ({
+        fullName: r.fullName,
+        private: r.private,
+      }));
+    } catch {
+      repos = [];
+    }
+  }
 
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-10 px-6 py-16">
@@ -29,7 +50,12 @@ export default async function ProjectsPage() {
 
       <section className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">
         <h2 className="mb-4 text-lg font-semibold">Nouveau projet</h2>
-        <NewProjectForm defaultType={profile.defaultProjectType} />
+        <NewProjectForm
+          defaultType={profile.defaultProjectType}
+          repos={repos}
+          canManageRepos={manages}
+          hasGitHub={access !== null}
+        />
       </section>
 
       <section>
@@ -53,6 +79,18 @@ export default async function ProjectsPage() {
                       </span>
                       <span className="font-medium text-neutral-100">
                         {p.name}
+                      </span>
+                      <span
+                        className="rounded border border-neutral-800 px-2 py-0.5 font-mono text-[11px] text-neutral-400"
+                        title={
+                          p.repo.mode === "github"
+                            ? `${p.repo.fullName} (${p.repo.private ? "privé" : "public"})`
+                            : "Projet local, aucun dépôt lié"
+                        }
+                      >
+                        {p.repo.mode === "github"
+                          ? `${p.repo.private ? "🔒" : "🌐"} ${p.repo.fullName}`
+                          : "local"}
                       </span>
                       <span className="ml-auto text-xs text-neutral-500">
                         {p.doneTaskCount}/{p.taskCount} tâches · {p.phaseCount}{" "}

@@ -71,6 +71,13 @@
       "when": 1784214689206,
       "tag": "0009_worthless_gabe_jones",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1784215472823,
+      "tag": "0010_military_wraith",
+      "breakpoints": true
     }
   ]
 }
