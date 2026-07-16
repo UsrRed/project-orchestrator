@@ -111,6 +111,18 @@ export const users = pgTable("users", {
   ...timestamps,
 });
 
+/**
+ * Configuration OAuth de l'application (creds de l'app auprès du provider),
+ * saisie depuis /setup plutôt que via l'env. Le secret est stocké CHIFFRÉ
+ * (AES-256-GCM, lib/crypto). Une ligne par provider.
+ */
+export const oauthConfig = pgTable("oauth_config", {
+  provider: text("provider").primaryKey(),
+  clientId: text("client_id").notNull(),
+  clientSecretEnc: text("client_secret_enc").notNull(),
+  ...timestamps,
+});
+
 // --- Tables Auth.js (adapter Drizzle) ------------------------------------
 
 export const accounts = pgTable(

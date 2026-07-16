@@ -1,10 +1,12 @@
 import Link from "next/link";
 
 import { signIn } from "@/auth";
-import { isGitHubConfigured } from "@/auth.config";
+import { isGitHubConfigured } from "@/lib/oauth-config";
 
-export default function SignInPage() {
-  const githubReady = isGitHubConfigured();
+export const dynamic = "force-dynamic";
+
+export default async function SignInPage() {
+  const githubReady = await isGitHubConfigured();
   const devOpen =
     process.env.ALLOW_DEV_USER === "true" ||
     process.env.NODE_ENV !== "production";
@@ -39,13 +41,14 @@ export default function SignInPage() {
           </button>
         </form>
       ) : (
-        <div className="rounded-lg border border-amber-800 bg-amber-950/20 px-4 py-3 text-sm text-amber-200">
-          <p className="font-semibold">GitHub OAuth non configuré.</p>
-          <p className="mt-1 text-amber-200/80">
-            Renseigne <code>AUTH_GITHUB_ID</code> et{" "}
-            <code>AUTH_GITHUB_SECRET</code> dans <code>.env</code> (callback :{" "}
-            <code>/api/auth/callback/github</code>), puis redémarre.
-          </p>
+        <div className="flex flex-col gap-3 rounded-lg border border-amber-800 bg-amber-950/20 px-4 py-3 text-sm text-amber-200">
+          <p className="font-semibold">GitHub OAuth pas encore configuré.</p>
+          <Link
+            href="/setup"
+            className="self-start rounded-lg bg-emerald-500 px-4 py-2 font-semibold text-neutral-950 transition hover:bg-emerald-400"
+          >
+            Configurer la connexion GitHub →
+          </Link>
         </div>
       )}
 

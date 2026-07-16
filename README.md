@@ -118,7 +118,8 @@ Puis il sélectionne le meilleur provider **disponible** (clé fournie) selon un
 
 Auth.js v5 + **GitHub OAuth** (adapter Drizzle) : config Edge-safe ([auth.config.ts](auth.config.ts)) + config Node avec adapter ([auth.ts](auth.ts)), middleware de protection ([middleware.ts](middleware.ts)), page `/signin`. Tout le code étant scopé par `userId`, seul `getCurrentUserId()` ([lib/users.ts](lib/users.ts)) lit la session.
 
-- **Production** : `AUTH_SECRET`, `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET` requis ; callback OAuth = `<origin>/api/auth/callback/github`. Les non-authentifiés sont redirigés vers `/signin`.
+- **Configuration sans `.env`** : la page **`/setup`** ouvre le formulaire GitHub *pré-rempli* (nom, homepage, **callback URL**), puis on colle le Client ID/Secret. Ils sont stockés **chiffrés en base** ([lib/oauth-config.ts](lib/oauth-config.ts)) et le provider s'active **dynamiquement, sans redémarrage** ([auth.ts](auth.ts) en config fonction). `AUTH_SECRET` reste requis ; `AUTH_GITHUB_ID/SECRET` en env sont un repli optionnel.
+- **Enforcement** : callback OAuth = `<origin>/api/auth/callback/github` ; les non-authentifiés sont redirigés vers `/signin`.
 - **Développement** : `ALLOW_DEV_USER="true"` (ou `NODE_ENV !== 'production'`) ouvre l'accès et utilise un **utilisateur local** — pratique pour le dev et les scripts/worker (hors contexte requête).
 
 ## Scripts
