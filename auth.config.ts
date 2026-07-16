@@ -8,6 +8,15 @@
 import type { NextAuthConfig } from "next-auth";
 import GitHub from "next-auth/providers/github";
 
+const githubId = process.env.AUTH_GITHUB_ID ?? process.env.GITHUB_ID;
+const githubSecret =
+  process.env.AUTH_GITHUB_SECRET ?? process.env.GITHUB_SECRET;
+
+/** GitHub OAuth est-il configuré (id + secret présents) ? */
+export function isGitHubConfigured(): boolean {
+  return Boolean(githubId && githubSecret);
+}
+
 /** L'auth est-elle contournée (dev/test) ? Sinon elle est appliquée. */
 function devBypass(): boolean {
   return (
@@ -19,12 +28,11 @@ function devBypass(): boolean {
 export const authConfig = {
   trustHost: true,
   pages: { signIn: "/signin" },
-  providers: [
-    GitHub({
-      clientId: process.env.AUTH_GITHUB_ID ?? process.env.GITHUB_ID,
-      clientSecret: process.env.AUTH_GITHUB_SECRET ?? process.env.GITHUB_SECRET,
-    }),
-  ],
+  // On n'enregistre le provider GitHub QUE s'il est configuré : sinon Auth.js
+  // enverrait `client_id=undefined` à GitHub, qui répond 404.
+  providers: isGitHubConfigured()
+    ? [GitHub({ clientId: githubId, clientSecret: githubSecret })]
+    : [],
   callbacks: {
     /** Gate d'accès du middleware : redirige les non-authentifiés (hors dev). */
     authorized({ auth, request }) {
