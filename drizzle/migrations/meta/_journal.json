@@ -43,6 +43,13 @@
       "when": 1784198789496,
       "tag": "0005_safe_mentor",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784203925379,
+      "tag": "0006_solid_drax",
+      "breakpoints": true
     }
   ]
 }

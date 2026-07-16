@@ -236,6 +236,10 @@ export const agentExecutions = pgTable("agent_executions", {
    * autonome (playground), avant l'existence des `Task` liées à un projet (M2).
    */
   taskId: uuid("task_id").references(() => tasks.id, { onDelete: "cascade" }),
+  /** Projet rattaché (pour le suivi budgétaire). Nullable (playground routeur). */
+  projectId: uuid("project_id").references(() => projects.id, {
+    onDelete: "cascade",
+  }),
   /** Utilisateur propriétaire de l'exécution (suivi du coût par compte). */
   userId: uuid("user_id")
     .notNull()

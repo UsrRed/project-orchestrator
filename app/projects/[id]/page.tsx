@@ -2,7 +2,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { AutoSubmitSelect } from "@/components/auto-submit-select";
+import { BudgetPanel } from "@/components/budget-panel";
 import { getProjectTree } from "@/lib/projects";
+import { getBudgetStatus } from "@/lib/budgets";
 import { listNormesForProject, listPhaseNormes } from "@/lib/normes";
 import { getCurrentUserId } from "@/lib/users";
 import {
@@ -53,6 +55,8 @@ export default async function ProjectDetailPage({
   const project = await getProjectTree(userId, id);
   if (!project) notFound();
 
+  const budget = await getBudgetStatus(userId, id);
+
   // Normes disponibles + normes associées par phase (M5).
   const availableNormes = await listNormesForProject(userId, id);
   const phaseNormes = new Map(
@@ -102,6 +106,8 @@ export default async function ProjectDetailPage({
           <p className="text-sm italic text-neutral-500">« {project.idea} »</p>
         )}
       </div>
+
+      <BudgetPanel projectId={project.id} status={budget} />
 
       <div className="flex flex-col gap-5">
         {project.phases.map((phase) => (

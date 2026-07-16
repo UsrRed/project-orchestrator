@@ -54,10 +54,18 @@ export interface WorkerDeps {
   onNote?: (run: RunRow, note: string) => Promise<void>;
   /** Persistance d'un artefact produit. */
   onArtifact?: (run: RunRow, artifact: StepArtifact) => Promise<void>;
+  /** Garde-fou budget projet : true → arrêt (raison project_budget). */
+  budgetExceeded?: (run: RunRow) => Promise<boolean>;
   now?: () => Date;
 }
 
-type StopReason = "completed" | "budget" | "iterations" | "timeout" | "killed";
+type StopReason =
+  | "completed"
+  | "budget"
+  | "project_budget"
+  | "iterations"
+  | "timeout"
+  | "killed";
 
 /** Évalue les garde-fous d'arrêt ; renvoie la raison ou null pour continuer. */
 function guardStop(run: RunRow, now: Date): StopReason | null {
@@ -71,6 +79,7 @@ function guardStop(run: RunRow, now: Date): StopReason | null {
 const TERMINAL: Record<StopReason, "succeeded" | "failed" | "cancelled"> = {
   completed: "succeeded",
   budget: "failed",
+  project_budget: "failed",
   iterations: "failed",
   timeout: "failed",
   killed: "cancelled",
@@ -93,6 +102,10 @@ export async function processRun(
     const preStop = guardStop(fresh, now());
     if (preStop) {
       await finishRun(runId, TERMINAL[preStop], preStop, undefined, now());
+      break;
+    }
+    if (deps.budgetExceeded && (await deps.budgetExceeded(fresh))) {
+      await finishRun(runId, "failed", "project_budget", undefined, now());
       break;
     }
 
@@ -137,6 +150,10 @@ export async function processRun(
       const postStop = guardStop(after, now());
       if (postStop) {
         await finishRun(runId, TERMINAL[postStop], postStop, undefined, now());
+        break;
+      }
+      if (deps.budgetExceeded && (await deps.budgetExceeded(after))) {
+        await finishRun(runId, "failed", "project_budget", undefined, now());
         break;
       }
     }

@@ -18,6 +18,7 @@ import {
 } from "@/lib/conversation";
 import { recordExecution } from "@/lib/executions";
 import { getDecryptedProviderKeys } from "@/lib/keys";
+import { assertWithinBudget } from "@/lib/budgets";
 import { buildPhaseNormsContext } from "@/lib/normes";
 import { enqueueRun, requestKill } from "@/lib/runs";
 import { generateWidget } from "@/lib/widgets";
@@ -53,11 +54,14 @@ async function record(
   },
   status: "succeeded" | "failed",
   startedAt: Date,
+  link: { projectId: string; taskId: string },
   error?: string,
 ): Promise<void> {
   await recordExecution({
     userId,
     taskLabel: label,
+    projectId: link.projectId,
+    taskId: link.taskId,
     provider: meta.spec.provider,
     model: meta.spec.modelId,
     tier: meta.tier,
@@ -112,6 +116,12 @@ export async function sendMessageAction(
     };
   }
 
+  try {
+    await assertWithinBudget(ctx.projectId);
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "Budget dépassé." };
+  }
+
   await addMessage(taskId, { role: "user", content: text });
   const history = await buildHistory(userId, taskId);
   const norms = await buildPhaseNormsContext(userId, ctx.phaseId);
@@ -132,11 +142,11 @@ export async function sendMessageAction(
         kind: "cowork_options",
         data: res.data,
       });
-      await record(userId, `[cowork:options] ${ctx.taskTitle}`, res, "succeeded", startedAt);
+      await record(userId, `[cowork:options] ${ctx.taskTitle}`, res, "succeeded", startedAt, { projectId: ctx.projectId, taskId });
     } else {
       const res = await manualReply(ctx, history, keys, norms.text);
       await addMessage(taskId, { role: "assistant", content: res.text });
-      await record(userId, `[manuel] ${ctx.taskTitle}`, res, "succeeded", startedAt);
+      await record(userId, `[manuel] ${ctx.taskTitle}`, res, "succeeded", startedAt, { projectId: ctx.projectId, taskId });
     }
   } catch (err) {
     return {
@@ -174,6 +184,11 @@ export async function generateWidgetAction(
   if (Object.keys(keys).length === 0) {
     return { ok: false, message: "Aucune clé API. Ajoute-en une sur l'accueil." };
   }
+  try {
+    await assertWithinBudget(ctx.projectId);
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "Budget dépassé." };
+  }
 
   const startedAt = new Date();
   try {
@@ -189,6 +204,7 @@ export async function generateWidgetAction(
       { spec: res.spec, tier: "frontier", promptTokens: res.promptTokens, completionTokens: res.completionTokens, costUsd: res.costUsd },
       "succeeded",
       startedAt,
+      { projectId: ctx.projectId, taskId },
     );
   } catch (err) {
     return {
@@ -242,6 +258,11 @@ export async function startRunAction(
       message: "Aucune clé API. Ajoute-en une sur l'accueil avant de lancer.",
     };
   }
+  try {
+    await assertWithinBudget(ctx.projectId);
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "Budget dépassé." };
+  }
 
   await enqueueRun(userId, taskId, {
     goal,
@@ -294,6 +315,11 @@ export async function chooseOptionAction(
   if (Object.keys(keys).length === 0) {
     return { ok: false, message: "Aucune clé API disponible." };
   }
+  try {
+    await assertWithinBudget(ctx.projectId);
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "Budget dépassé." };
+  }
 
   await addMessage(taskId, {
     role: "user",
@@ -318,7 +344,7 @@ export async function chooseOptionAction(
       kind: "artifact",
       data: { artifactId },
     });
-    await record(userId, `[cowork:artefact] ${ctx.taskTitle}`, res, "succeeded", startedAt);
+    await record(userId, `[cowork:artefact] ${ctx.taskTitle}`, res, "succeeded", startedAt, { projectId: ctx.projectId, taskId });
   } catch (err) {
     return {
       ok: false,

@@ -16,6 +16,7 @@ import { runWithFallback, type ProviderKeys } from "@/lib/llm-router";
 import { computeCostUsd } from "@/lib/models";
 import { addArtifact, addMessage, getTaskContext, listMessages } from "@/lib/conversation";
 import { recordExecution } from "@/lib/executions";
+import { projectBudgetExceeded } from "@/lib/budgets";
 import { buildPhaseNormsContext } from "@/lib/normes";
 import type { StepFn, WorkerDeps } from "@/lib/worker";
 
@@ -88,6 +89,8 @@ export function makeAutonomousDeps(
     await recordExecution({
       userId,
       taskLabel: `[auto] ${taskCtx.taskTitle} — étape ${ctx.iteration + 1}`,
+      projectId: taskCtx.projectId,
+      taskId: ctx.taskId,
       provider: spec.provider,
       model: spec.modelId,
       tier: "fast",
@@ -109,6 +112,10 @@ export function makeAutonomousDeps(
 
   return {
     stepFn,
+    budgetExceeded: async (run) => {
+      const taskCtx = await getTaskContext(userId, run.taskId);
+      return taskCtx ? projectBudgetExceeded(taskCtx.projectId) : false;
+    },
     onNote: async (run, note) => {
       await addMessage(run.taskId, {
         role: "assistant",

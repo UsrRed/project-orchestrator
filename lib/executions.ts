@@ -26,6 +26,9 @@ export interface RecordExecutionInput {
   error?: string;
   startedAt: Date;
   finishedAt: Date;
+  /** Rattachement au projet (suivi budgétaire) et à la tâche, si connus. */
+  projectId?: string;
+  taskId?: string;
 }
 
 /** Journalise une exécution terminée (succès ou échec). */
@@ -35,6 +38,8 @@ export async function recordExecution(
   await db.insert(agentExecutions).values({
     userId: input.userId,
     taskLabel: input.taskLabel,
+    projectId: input.projectId ?? null,
+    taskId: input.taskId ?? null,
     provider: input.provider,
     model: input.model,
     tier: input.tier,
@@ -48,6 +53,17 @@ export async function recordExecution(
     startedAt: input.startedAt,
     finishedAt: input.finishedAt,
   });
+}
+
+/** Coût total réel dépensé sur un projet (somme des exécutions). */
+export async function projectSpendUsd(projectId: string): Promise<number> {
+  const [row] = await db
+    .select({
+      total: sql<string>`coalesce(sum(${agentExecutions.costUsd}), 0)`,
+    })
+    .from(agentExecutions)
+    .where(eq(agentExecutions.projectId, projectId));
+  return Number(row?.total ?? 0);
 }
 
 export interface ExecutionView {

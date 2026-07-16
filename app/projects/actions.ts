@@ -14,6 +14,7 @@ import {
   autoAssociateProjectNorms,
   dissociateNorme,
 } from "@/lib/normes";
+import { setBudget } from "@/lib/budgets";
 import { getCurrentUserId } from "@/lib/users";
 import {
   addPhase,
@@ -81,6 +82,7 @@ export async function generateProjectAction(
     await recordExecution({
       userId,
       taskLabel: `[architecture] ${result.architecture.projectName}`,
+      projectId,
       provider: result.spec.provider,
       model: result.spec.modelId,
       tier: "frontier",
@@ -173,6 +175,18 @@ export async function deleteTaskAction(formData: FormData): Promise<void> {
   if (!taskId) return;
   const userId = await getCurrentUserId();
   await deleteTask(userId, taskId);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+// --- Budget projet (M7.3) ------------------------------------------------
+
+export async function setBudgetAction(formData: FormData): Promise<void> {
+  const projectId = String(formData.get("projectId") ?? "");
+  const raw = String(formData.get("limitUsd") ?? "").trim();
+  if (!projectId) return;
+  const limitUsd = raw === "" ? 0 : Number(raw);
+  const userId = await getCurrentUserId();
+  await setBudget(userId, projectId, Number.isFinite(limitUsd) ? limitUsd : 0);
   revalidatePath(`/projects/${projectId}`);
 }
 
