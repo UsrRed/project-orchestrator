@@ -25,6 +25,7 @@ import {
   type Tier,
 } from "@/lib/models";
 import { tryAcquire } from "@/lib/rate-limit";
+import type { ConnMethod } from "@/lib/providers";
 
 // --- Entrées / sorties ---------------------------------------------------
 
@@ -49,8 +50,18 @@ export interface RouteRequest {
   forceTier?: Tier;
 }
 
-/** Clés API disponibles (déchiffrées), indexées par provider. */
-export type ProviderKeys = Partial<Record<Provider, string>>;
+/** Connexion déchiffrée à un provider (méthode + secret éventuel). */
+export interface ProviderConnection {
+  method: ConnMethod;
+  /** Clé API ou jeton OAuth. Absent pour la méthode 'none' (local). */
+  secret?: string;
+}
+
+/**
+ * Connexions disponibles (déchiffrées), indexées par provider. Nom conservé
+ * pour rétro-compatibilité — la valeur est désormais une `ProviderConnection`.
+ */
+export type ProviderKeys = Partial<Record<Provider, ProviderConnection>>;
 
 export interface RouteDecision {
   tier: Tier;
@@ -182,24 +193,40 @@ export function selectModelChain(tier: Tier, keys: ProviderKeys): ModelSpec[] {
 
 // --- Instanciation du modèle SDK ----------------------------------------
 
-export function buildModel(spec: ModelSpec, apiKey: string): LanguageModel {
+export function buildModel(
+  spec: ModelSpec,
+  conn: ProviderConnection,
+): LanguageModel {
+  const secret = conn.secret ?? "";
+  // En OAuth, on ajoute un en-tête Authorization: Bearer. Pour OpenAI et les
+  // providers OpenAI-compatibles, la clé/le jeton est DÉJÀ envoyé en Bearer par
+  // le SDK → passer le jeton comme apiKey suffit. Pour Anthropic/Google (qui
+  // utilisent des en-têtes propres), on force l'en-tête Bearer (best-effort ;
+  // leur voie « sans clé » officielle reste Vertex/Bedrock).
+  const oauthHeaders =
+    conn.method === "oauth" ? { Authorization: `Bearer ${secret}` } : undefined;
+
   switch (spec.provider) {
     case "anthropic":
-      return createAnthropic({ apiKey })(spec.modelId);
+      return createAnthropic({ apiKey: secret, headers: oauthHeaders })(
+        spec.modelId,
+      );
     case "openai":
-      return createOpenAI({ apiKey })(spec.modelId);
+      return createOpenAI({ apiKey: secret })(spec.modelId);
     case "google":
-      return createGoogleGenerativeAI({ apiKey })(spec.modelId);
+      return createGoogleGenerativeAI({ apiKey: secret, headers: oauthHeaders })(
+        spec.modelId,
+      );
     case "groq":
       return createOpenAICompatible({
         name: "groq",
-        apiKey,
+        apiKey: secret,
         baseURL: "https://api.groq.com/openai/v1",
       })(spec.modelId);
     case "openrouter":
       return createOpenAICompatible({
         name: "openrouter",
-        apiKey,
+        apiKey: secret,
         baseURL: "https://openrouter.ai/api/v1",
       })(spec.modelId);
     case "ollama": {
@@ -209,7 +236,7 @@ export function buildModel(spec: ModelSpec, apiKey: string): LanguageModel {
       // pas le tool-mode ni json_object, seulement json_schema.
       const local = createOpenAICompatible({
         name: "local",
-        apiKey: apiKey || "local",
+        apiKey: secret || "local",
         baseURL: process.env.LOCAL_AI_BASE_URL ?? "http://localhost:1234/v1",
       });
       return local.chatModel(
@@ -310,13 +337,13 @@ export async function runWithFallback<T>(
       errors.push(`${provider}: limite de débit atteinte`);
       continue;
     }
-    const apiKey = keys[provider];
-    if (!apiKey) {
-      errors.push(`${provider}: clé manquante`);
+    const conn = keys[provider];
+    if (!conn) {
+      errors.push(`${provider}: connexion manquante`);
       continue;
     }
 
-    const model = buildModel(spec, apiKey);
+    const model = buildModel(spec, conn);
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), timeoutMs);
     try {

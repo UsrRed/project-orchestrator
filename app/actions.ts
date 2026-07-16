@@ -9,14 +9,18 @@ import {
   type TaskKind,
 } from "@/lib/llm-router";
 import {
-  addApiKey,
-  deleteApiKey,
-  getDecryptedProviderKeys,
+  addConnection,
+  deleteConnection,
+  getProviderConnections,
   touchProviderKey,
 } from "@/lib/keys";
 import { recordExecution } from "@/lib/executions";
 import { getCurrentUserId } from "@/lib/users";
 import type { Provider } from "@/lib/models";
+import {
+  isMethodSupported,
+  type ConnMethod,
+} from "@/lib/providers";
 
 // --- Routeur -------------------------------------------------------------
 
@@ -64,18 +68,19 @@ export async function routeAction(
   }
 
   const userId = await getCurrentUserId();
-  const keys = await getDecryptedProviderKeys(userId);
+  const keys = await getProviderConnections(userId);
   const req: RouteRequest = { prompt, kind };
 
-  // Aucune clé configurée → décision de routage seule (dry-run), sans dépense.
+  // Aucune connexion configurée → décision de routage seule (dry-run), sans dépense.
   if (Object.keys(keys).length === 0) {
     try {
+      const demo: ConnMethod = "api_key";
       const decision = routeOnly(req, {
-        anthropic: "demo",
-        openai: "demo",
-        google: "demo",
-        openrouter: "demo",
-        groq: "demo",
+        anthropic: { method: demo, secret: "demo" },
+        openai: { method: demo, secret: "demo" },
+        google: { method: demo, secret: "demo" },
+        openrouter: { method: demo, secret: "demo" },
+        groq: { method: demo, secret: "demo" },
       });
       return {
         ok: true,
@@ -161,7 +166,7 @@ export async function routeAction(
   }
 }
 
-// --- Gestion des clés API ------------------------------------------------
+// --- Connecteurs (clé API / OAuth / local) -------------------------------
 
 export interface KeyFormState {
   ok: boolean;
@@ -177,31 +182,63 @@ const VALID_PROVIDERS: ReadonlySet<string> = new Set<Provider>([
   "ollama",
 ]);
 
-export async function addKeyAction(
+const VALID_METHODS: ReadonlySet<string> = new Set<ConnMethod>([
+  "api_key",
+  "oauth",
+  "none",
+]);
+
+export async function addConnectionAction(
   _prev: KeyFormState,
   formData: FormData,
 ): Promise<KeyFormState> {
   const rawProvider = String(formData.get("provider") ?? "");
-  const key = String(formData.get("key") ?? "");
+  const rawMethod = String(formData.get("method") ?? "api_key");
+  const secret = String(formData.get("key") ?? "");
   const labelRaw = String(formData.get("label") ?? "").trim();
 
   if (!VALID_PROVIDERS.has(rawProvider)) {
     return { ok: false, message: "Provider inconnu." };
   }
-  if (!key.trim()) {
-    return { ok: false, message: "La clé API est vide." };
+  if (!VALID_METHODS.has(rawMethod)) {
+    return { ok: false, message: "Méthode de connexion inconnue." };
+  }
+  const provider = rawProvider as Provider;
+  const method = rawMethod as ConnMethod;
+
+  if (!isMethodSupported(provider, method)) {
+    return {
+      ok: false,
+      message: `Méthode « ${method} » non supportée pour ${provider}.`,
+    };
+  }
+  if (method !== "none" && !secret.trim()) {
+    return {
+      ok: false,
+      message:
+        method === "oauth"
+          ? "Le jeton OAuth est vide."
+          : "La clé API est vide.",
+    };
   }
 
   try {
     const userId = await getCurrentUserId();
-    await addApiKey(
+    await addConnection(
       userId,
-      rawProvider as Provider,
-      key,
+      provider,
+      method,
+      method === "none" ? null : secret,
       labelRaw.length > 0 ? labelRaw : null,
     );
     revalidatePath("/");
-    return { ok: true, message: `Clé ${rawProvider} enregistrée (chiffrée).` };
+    return {
+      ok: true,
+      message:
+        method === "none"
+          ? `Connexion locale ${provider} enregistrée.`
+          : `Connexion ${provider} (${method}) enregistrée (chiffrée).`,
+    };
   } catch (err) {
     return {
       ok: false,
@@ -210,10 +247,12 @@ export async function addKeyAction(
   }
 }
 
-export async function deleteKeyAction(formData: FormData): Promise<void> {
+export async function deleteConnectionAction(
+  formData: FormData,
+): Promise<void> {
   const id = String(formData.get("id") ?? "");
   if (!id) return;
   const userId = await getCurrentUserId();
-  await deleteApiKey(userId, id);
+  await deleteConnection(userId, id);
   revalidatePath("/");
 }

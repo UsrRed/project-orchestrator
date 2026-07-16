@@ -34,7 +34,10 @@ describe("crypto", () => {
 });
 
 describe("routeur : chaîne de fallback", () => {
-  const keys = { ollama: "x", openai: "x" } as const;
+  const keys = {
+    ollama: { method: "none" as const },
+    openai: { method: "api_key" as const, secret: "x" },
+  };
 
   beforeEach(() => {
     resetBreakers();

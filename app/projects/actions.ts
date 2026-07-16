@@ -7,7 +7,7 @@ import {
   generateArchitecture,
   type ProjectType,
 } from "@/lib/architect";
-import { getDecryptedProviderKeys } from "@/lib/keys";
+import { getProviderConnections } from "@/lib/keys";
 import { recordExecution } from "@/lib/executions";
 import {
   associateNorme,
@@ -59,7 +59,7 @@ export async function generateProjectAction(
   if (!idea) return { ok: false, message: "Décris ton idée de projet." };
 
   const userId = await getCurrentUserId();
-  const keys = await getDecryptedProviderKeys(userId);
+  const keys = await getProviderConnections(userId);
   if (Object.keys(keys).length === 0) {
     return {
       ok: false,

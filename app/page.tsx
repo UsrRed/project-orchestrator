@@ -5,7 +5,7 @@ import { KeysManager } from "@/components/keys-manager";
 import { RouterDemo } from "@/components/router-demo";
 import { UserMenu } from "@/components/user-menu";
 import { executionStats, listExecutions } from "@/lib/executions";
-import { listApiKeys } from "@/lib/keys";
+import { listConnections } from "@/lib/keys";
 import { getCurrentUserId } from "@/lib/users";
 
 const MILESTONES: Array<{ id: string; label: string; done: boolean }> = [
@@ -23,8 +23,8 @@ export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const userId = await getCurrentUserId();
-  const [keys, executions, stats] = await Promise.all([
-    listApiKeys(userId),
+  const [connections, executions, stats] = await Promise.all([
+    listConnections(userId),
     listExecutions(userId),
     executionStats(userId),
   ]);
@@ -69,12 +69,12 @@ export default async function Home() {
       </div>
 
       <section className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">
-        <h2 className="mb-1 text-lg font-semibold">Clés API</h2>
+        <h2 className="mb-1 text-lg font-semibold">Connecteurs LLM</h2>
         <p className="mb-4 text-sm text-neutral-500">
-          Stockées chiffrées (AES-256-GCM). Le client ne reçoit qu&apos;un
-          aperçu masqué — jamais la clé en clair.
+          Clé API, jeton OAuth (Bearer) ou serveur local — le secret est stocké
+          chiffré (AES-256-GCM) ; le client ne reçoit qu&apos;un aperçu masqué.
         </p>
-        <KeysManager keys={keys} />
+        <KeysManager connections={connections} />
       </section>
 
       <section className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">

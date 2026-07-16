@@ -4,10 +4,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { getCurrentUserId } from "@/lib/users";
 import {
-  addApiKey,
-  deleteApiKey,
-  getDecryptedProviderKeys,
-  listApiKeys,
+  addConnection,
+  deleteConnection,
+  getProviderConnections,
+  listConnections,
 } from "@/lib/keys";
 import {
   executionHealth,
@@ -86,24 +86,37 @@ beforeEach(async () => {
   await reset();
 });
 
-describe("clés API (chiffrées)", () => {
+describe("connecteurs (clé API / OAuth / local)", () => {
   it("ajoute, masque, déchiffre, upsert, supprime", async () => {
-    await addApiKey(userId, "anthropic", "sk-ant-TESTKEY-abcdef123456", "perso");
-    await addApiKey(userId, "groq", "gsk_TESTKEY-zyxwvu987654", null);
-    const keys = await listApiKeys(userId);
-    expect(keys).toHaveLength(2);
-    expect(keys.every((k) => !k.masked.includes("TESTKEY"))).toBe(true);
+    await addConnection(userId, "anthropic", "api_key", "sk-ant-TESTKEY-abcdef123456", "perso");
+    await addConnection(userId, "groq", "api_key", "gsk_TESTKEY-zyxwvu987654", null);
+    const conns = await listConnections(userId);
+    expect(conns).toHaveLength(2);
+    expect(conns.every((c) => !c.masked.includes("TESTKEY"))).toBe(true);
 
-    const dec = await getDecryptedProviderKeys(userId);
-    expect(dec.anthropic).toBe("sk-ant-TESTKEY-abcdef123456");
-    expect(dec.groq).toBe("gsk_TESTKEY-zyxwvu987654");
+    const dec = await getProviderConnections(userId);
+    expect(dec.anthropic?.secret).toBe("sk-ant-TESTKEY-abcdef123456");
+    expect(dec.groq?.secret).toBe("gsk_TESTKEY-zyxwvu987654");
 
-    await addApiKey(userId, "anthropic", "sk-ant-NEW-000111", "perso");
-    expect((await listApiKeys(userId))).toHaveLength(2);
-    expect((await getDecryptedProviderKeys(userId)).anthropic).toBe("sk-ant-NEW-000111");
+    await addConnection(userId, "anthropic", "api_key", "sk-ant-NEW-000111", "perso");
+    expect((await listConnections(userId))).toHaveLength(2);
+    expect((await getProviderConnections(userId)).anthropic?.secret).toBe("sk-ant-NEW-000111");
 
-    await deleteApiKey(userId, keys[0]!.id);
-    expect(await listApiKeys(userId)).toHaveLength(1);
+    await deleteConnection(userId, conns[0]!.id);
+    expect(await listConnections(userId)).toHaveLength(1);
+  });
+
+  it("supporte les méthodes oauth (jeton chiffré) et none (local sans secret)", async () => {
+    await addConnection(userId, "google", "oauth", "ya29.oauth-token-xyz", null);
+    await addConnection(userId, "ollama", "none", null, null);
+    const dec = await getProviderConnections(userId);
+    expect(dec.google).toEqual({ method: "oauth", secret: "ya29.oauth-token-xyz" });
+    expect(dec.ollama).toEqual({ method: "none" });
+
+    const views = await listConnections(userId);
+    const local = views.find((v) => v.provider === "ollama");
+    expect(local?.method).toBe("none");
+    expect(local?.masked).not.toContain("token");
   });
 });
 

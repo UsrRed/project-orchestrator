@@ -17,7 +17,7 @@ import {
   setTaskMode,
 } from "@/lib/conversation";
 import { recordExecution } from "@/lib/executions";
-import { getDecryptedProviderKeys } from "@/lib/keys";
+import { getProviderConnections } from "@/lib/keys";
 import { assertWithinBudget } from "@/lib/budgets";
 import { buildPhaseNormsContext } from "@/lib/normes";
 import { enqueueRun, requestKill } from "@/lib/runs";
@@ -108,7 +108,7 @@ export async function sendMessageAction(
   const ctx = await getTaskContext(userId, taskId);
   if (!ctx) return { ok: false, message: "Tâche introuvable." };
 
-  const keys = await getDecryptedProviderKeys(userId);
+  const keys = await getProviderConnections(userId);
   if (Object.keys(keys).length === 0) {
     return {
       ok: false,
@@ -180,7 +180,7 @@ export async function generateWidgetAction(
   const ctx = await getTaskContext(userId, taskId);
   if (!ctx) return { ok: false, message: "Tâche introuvable." };
 
-  const keys = await getDecryptedProviderKeys(userId);
+  const keys = await getProviderConnections(userId);
   if (Object.keys(keys).length === 0) {
     return { ok: false, message: "Aucune clé API. Ajoute-en une sur l'accueil." };
   }
@@ -251,7 +251,7 @@ export async function startRunAction(
   const ctx = await getTaskContext(userId, taskId);
   if (!ctx) return { ok: false, message: "Tâche introuvable." };
 
-  const keys = await getDecryptedProviderKeys(userId);
+  const keys = await getProviderConnections(userId);
   if (Object.keys(keys).length === 0) {
     return {
       ok: false,
@@ -311,7 +311,7 @@ export async function chooseOptionAction(
   const option = status.pendingOptions.options[index];
   if (!option) return { ok: false, message: "Option invalide." };
 
-  const keys = await getDecryptedProviderKeys(userId);
+  const keys = await getProviderConnections(userId);
   if (Object.keys(keys).length === 0) {
     return { ok: false, message: "Aucune clé API disponible." };
   }

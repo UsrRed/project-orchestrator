@@ -1,12 +1,13 @@
 /**
- * Service CRUD des clés API utilisateur (Milestone 1).
+ * Connecteurs LLM de l'utilisateur (Milestone 1 → connecteurs multi-méthodes).
  *
- * Règles de sécurité (cf. plan, section sécurité) :
- *  - la clé en clair n'entre en base QUE chiffrée (AES-256-GCM via lib/crypto) ;
- *  - la clé en clair ne ressort JAMAIS vers le client : l'UI ne reçoit qu'un
- *    aperçu masqué (`masked`) ;
- *  - le déchiffrement (`getDecryptedProviderKeys`) est réservé au serveur, au
- *    moment d'exécuter un appel via le routeur.
+ * Une connexion associe un provider à une méthode :
+ *  - 'api_key' / 'oauth' : un secret (clé API ou jeton OAuth) stocké CHIFFRÉ ;
+ *  - 'none' : aucune credential (serveur local).
+ *
+ * Règles de sécurité : le secret n'entre en base que chiffré (AES-256-GCM), ne
+ * ressort jamais vers le client (UI = aperçu masqué), et n'est déchiffré que
+ * côté serveur au moment de router un appel.
  */
 import "server-only";
 
@@ -16,20 +17,34 @@ import { db } from "@/lib/db";
 import { decrypt, encrypt, maskSecret } from "@/lib/crypto";
 import type { Provider } from "@/lib/models";
 import type { ProviderKeys } from "@/lib/llm-router";
+import type { ConnMethod } from "@/lib/providers";
 import { apiKeys } from "@/drizzle/schema";
 
-export interface ApiKeyView {
+export interface ConnectionView {
   id: string;
   provider: Provider;
+  method: ConnMethod;
   label: string | null;
-  /** Aperçu masqué (jamais la clé en clair). */
+  /** Aperçu masqué du secret (ou libellé pour 'none'). */
   masked: string;
   lastUsedAt: Date | null;
   createdAt: Date;
 }
 
-/** Liste les clés d'un utilisateur, masquées, pour l'affichage UI. */
-export async function listApiKeys(userId: string): Promise<ApiKeyView[]> {
+function safeMask(method: ConnMethod, encryptedKey: string | null): string {
+  if (method === "none") return "— (local, sans credential)";
+  if (!encryptedKey) return "⚠️ secret manquant";
+  try {
+    return maskSecret(decrypt(encryptedKey));
+  } catch {
+    return "⚠️ indéchiffrable";
+  }
+}
+
+/** Liste les connexions d'un utilisateur, secrets masqués, pour l'UI. */
+export async function listConnections(
+  userId: string,
+): Promise<ConnectionView[]> {
   const rows = await db
     .select()
     .from(apiKeys)
@@ -39,58 +54,55 @@ export async function listApiKeys(userId: string): Promise<ApiKeyView[]> {
   return rows.map((r) => ({
     id: r.id,
     provider: r.provider as Provider,
+    method: r.method as ConnMethod,
     label: r.label,
-    masked: safeMask(r.encryptedKey),
+    masked: safeMask(r.method as ConnMethod, r.encryptedKey),
     lastUsedAt: r.lastUsedAt,
     createdAt: r.createdAt,
   }));
 }
 
-function safeMask(encryptedKey: string): string {
-  try {
-    return maskSecret(decrypt(encryptedKey));
-  } catch {
-    // Clé indéchiffrable (mauvaise master key / donnée altérée) : on ne
-    // divulgue rien, mais on signale le problème dans l'UI.
-    return "⚠️ indéchiffrable";
-  }
-}
-
-/** Ajoute (ou remplace) une clé chiffrée pour un provider. */
-export async function addApiKey(
+/** Ajoute (ou remplace) une connexion pour un provider selon sa méthode. */
+export async function addConnection(
   userId: string,
   provider: Provider,
-  plaintextKey: string,
+  method: ConnMethod,
+  secret: string | null,
   label: string | null,
 ): Promise<void> {
-  const trimmed = plaintextKey.trim();
-  if (!trimmed) throw new Error("La clé API est vide.");
+  let encryptedKey: string | null = null;
+  if (method !== "none") {
+    const trimmed = (secret ?? "").trim();
+    if (!trimmed) {
+      throw new Error("Un secret (clé API ou jeton) est requis pour cette méthode.");
+    }
+    encryptedKey = encrypt(trimmed);
+  }
 
-  const encryptedKey = encrypt(trimmed);
-
-  // La contrainte unique (userId, provider, label) permet un upsert propre :
-  // ré-ajouter la même (provider,label) met à jour la clé plutôt que d'échouer.
   await db
     .insert(apiKeys)
-    .values({ userId, provider, label, encryptedKey })
+    .values({ userId, provider, method, label, encryptedKey })
     .onConflictDoUpdate({
       target: [apiKeys.userId, apiKeys.provider, apiKeys.label],
-      set: { encryptedKey, updatedAt: new Date() },
+      set: { method, encryptedKey, updatedAt: new Date() },
     });
 }
 
-/** Supprime une clé (scopée à l'utilisateur pour éviter toute fuite inter-compte). */
-export async function deleteApiKey(userId: string, id: string): Promise<void> {
+/** Supprime une connexion (scopée à l'utilisateur). */
+export async function deleteConnection(
+  userId: string,
+  id: string,
+): Promise<void> {
   await db
     .delete(apiKeys)
     .where(and(eq(apiKeys.id, id), eq(apiKeys.userId, userId)));
 }
 
 /**
- * Déchiffre l'ensemble des clés de l'utilisateur pour alimenter le routeur.
- * SERVEUR UNIQUEMENT — ne jamais renvoyer ce résultat au client.
+ * Connexions déchiffrées de l'utilisateur, indexées par provider (première
+ * gagnante), pour alimenter le routeur. SERVEUR UNIQUEMENT.
  */
-export async function getDecryptedProviderKeys(
+export async function getProviderConnections(
   userId: string,
 ): Promise<ProviderKeys> {
   const rows = await db
@@ -98,22 +110,26 @@ export async function getDecryptedProviderKeys(
     .from(apiKeys)
     .where(eq(apiKeys.userId, userId));
 
-  const keys: ProviderKeys = {};
+  const conns: ProviderKeys = {};
   for (const r of rows) {
+    const provider = r.provider as Provider;
+    if (conns[provider]) continue; // première connexion par provider
+    const method = r.method as ConnMethod;
+    if (method === "none") {
+      conns[provider] = { method };
+      continue;
+    }
+    if (!r.encryptedKey) continue;
     try {
-      // La première clé rencontrée par provider gagne (une seule clé par
-      // provider est nécessaire au routeur M1).
-      if (!keys[r.provider as Provider]) {
-        keys[r.provider as Provider] = decrypt(r.encryptedKey);
-      }
+      conns[provider] = { method, secret: decrypt(r.encryptedKey) };
     } catch {
-      // On ignore les clés indéchiffrables plutôt que de faire planter le run.
+      // secret indéchiffrable → on ignore cette connexion
     }
   }
-  return keys;
+  return conns;
 }
 
-/** Marque une clé comme utilisée (traçabilité `lastUsedAt`). */
+/** Marque une connexion comme utilisée (traçabilité). */
 export async function touchProviderKey(
   userId: string,
   provider: Provider,

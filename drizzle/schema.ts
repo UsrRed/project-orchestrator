@@ -167,7 +167,12 @@ export const verificationTokens = pgTable(
   }),
 );
 
-/** Clés API fédérées de l'utilisateur — la clé est stockée CHIFFRÉE (AES-256-GCM). */
+/**
+ * Connecteurs LLM de l'utilisateur (table historiquement « api_keys »).
+ * Chaque ligne = une connexion à un provider, selon une `method` :
+ *  - 'api_key' / 'oauth' : secret CHIFFRÉ dans `encrypted_key` (clé ou jeton) ;
+ *  - 'none' : aucune credential (serveur local) → `encrypted_key` nul.
+ */
 export const apiKeys = pgTable(
   "api_keys",
   {
@@ -176,9 +181,11 @@ export const apiKeys = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     provider: providerEnum("provider").notNull(),
+    /** Méthode de connexion : 'api_key' | 'oauth' | 'none'. */
+    method: text("method").notNull().default("api_key"),
     label: text("label"),
-    /** Payload chiffré renvoyé par lib/crypto.ts (format iv:authTag:ciphertext, base64). */
-    encryptedKey: text("encrypted_key").notNull(),
+    /** Secret chiffré (clé API ou jeton OAuth). Nul pour la méthode 'none'. */
+    encryptedKey: text("encrypted_key"),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
     ...timestamps,
   },

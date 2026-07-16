@@ -108,7 +108,9 @@ Le classifieur heuristique (`lib/llm-router.ts`) choisit un *tier* :
 - **fast** — tâches simples / faible contexte (traduction, formatage, validation) → modèles économiques (Groq Llama, Gemini Flash, GPT-4o-mini…)
 - **frontier** — tâches complexes / grand contexte (recherche, architecture, code) → modèles haut de gamme (Claude 3.5 Sonnet, GPT-4o, Gemini 1.5 Pro…)
 
-Un **modèle local** (LM Studio / Ollama, OpenAI-compatible via `LOCAL_AI_BASE_URL`) est pris en charge comme provider `ollama` : coût nul, donc **préféré par le routeur** quand une clé locale est enregistrée. Toute la chaîne (routage, architecte, chat, Cowork, runs autonomes, widgets) a été validée de bout en bout contre un modèle local (qwen3-coder-30b).
+Un **modèle local** (LM Studio / Ollama, OpenAI-compatible via `LOCAL_AI_BASE_URL`) est pris en charge comme provider `ollama` : coût nul, donc **préféré par le routeur** quand une connexion locale est enregistrée. Toute la chaîne (routage, architecte, chat, Cowork, runs autonomes, widgets) a été validée de bout en bout contre un modèle local (qwen3-coder-30b).
+
+**Connecteurs multi-méthodes** — chaque provider se connecte via une **méthode** ([lib/providers.ts](lib/providers.ts)) : `api_key` (clé API), `oauth` (jeton Bearer collé, obtenu hors-app) ou `none` (serveur local, sans credential). Le secret est stocké chiffré ; le routeur construit le client en conséquence (clé, `Authorization: Bearer`, ou local). L'OAuth-token est fiable pour les endpoints OpenAI-compatibles ; pour Anthropic/Google la voie « sans clé » officielle reste **Vertex/Bedrock** (les logins abonnement type Gemini CLI / Claude Code utilisent des clients OAuth privés et ne sont pas répliqués).
 
 **Fiabilité (M7.1)** — tous les appels LLM passent par `runWithFallback` ([lib/llm-router.ts](lib/llm-router.ts)) : timeout par tentative, retry (SDK), **fallback multi-provider** (parcours de la chaîne de préférence du tier), **circuit-breaker** léger (saute un provider qui échoue en série) et **rate-limiting par provider** ([lib/rate-limit.ts](lib/rate-limit.ts), `ollama` local exempté).
 

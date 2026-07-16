@@ -50,6 +50,13 @@
       "when": 1784203925379,
       "tag": "0006_solid_drax",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784206369973,
+      "tag": "0007_cultured_nick_fury",
+      "breakpoints": true
     }
   ]
 }

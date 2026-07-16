@@ -38,7 +38,7 @@ async function main(): Promise<void> {
   const { claimNextRun, finishRun } = await import("@/lib/runs");
   const { processRun } = await import("@/lib/worker");
   const { makeAutonomousDeps } = await import("@/lib/autonomous-agent");
-  const { getDecryptedProviderKeys } = await import("@/lib/keys");
+  const { getProviderConnections } = await import("@/lib/keys");
   const { captureException } = await import("@/lib/observability");
 
   console.log("[worker] démarré — polling de la queue autonomous_runs…");
@@ -59,7 +59,7 @@ async function main(): Promise<void> {
     }
 
     console.log(`[worker] run ${claimed.id} réclamé (objectif: ${claimed.goal})`);
-    const keys = await getDecryptedProviderKeys(claimed.userId);
+    const keys = await getProviderConnections(claimed.userId);
     if (Object.keys(keys).length === 0) {
       await finishRun(
         claimed.id,
