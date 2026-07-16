@@ -41,6 +41,36 @@ export async function getGitHubOAuthConfig(): Promise<OAuthCreds | null> {
   return null;
 }
 
+/**
+ * Vérifie la forme d'un client_id GitHub. Renvoie un message d'erreur, ou null
+ * si l'identifiant est plausible.
+ *
+ * Motivation : un identifiant fantaisiste n'échoue qu'au moment du login, où
+ * GitHub répond un **404 opaque** sur /login/oauth/authorize — impossible à
+ * diagnostiquer pour l'utilisateur. On refuse donc à la saisie.
+ *
+ * On reste volontairement permissif sur les formats (GitHub les a déjà fait
+ * évoluer : 20 hexas historiques, puis `Ov23li…`) : on rejette surtout les
+ * valeurs d'exemple et les GitHub Apps, qui ignorent le paramètre `scope` dont
+ * dépend l'accès aux dépôts ([lib/github.ts](github.ts)).
+ */
+export function validateGitHubClientId(clientId: string): string | null {
+  const id = clientId.trim();
+  if (!id) return "Client ID requis.";
+
+  if (/^(Iv1\.|Iv23)/.test(id)) {
+    return "Cet identifiant est celui d'une GitHub App, pas d'une OAuth App. Crée une OAuth App (lien ci-dessus) : les GitHub Apps ignorent les scopes dont l'app a besoin.";
+  }
+  if (!/^[A-Za-z0-9._-]+$/.test(id) || id.length < 16) {
+    return "Client ID invalide. Copie celui affiché sur la page de ton OAuth App GitHub (ex. « Ov23li… » ou 20 caractères hexadécimaux).";
+  }
+  // Valeurs d'exemple de la doc GitHub, recopiées telles quelles.
+  if (/client_?id|your_?client|xxxx|example/i.test(id)) {
+    return "Client ID invalide : c'est une valeur d'exemple. Copie celui de ton OAuth App GitHub.";
+  }
+  return null;
+}
+
 /** Enregistre (upsert) les creds GitHub, secret chiffré. */
 export async function setGitHubOAuthConfig(
   clientId: string,
@@ -49,6 +79,9 @@ export async function setGitHubOAuthConfig(
   const id = clientId.trim();
   const secret = clientSecret.trim();
   if (!id || !secret) throw new Error("Client ID et Client Secret requis.");
+
+  const invalid = validateGitHubClientId(id);
+  if (invalid) throw new Error(invalid);
 
   await db
     .insert(oauthConfig)

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 
 import { db } from "@/lib/db";
 import { getCurrentUserId } from "@/lib/users";
@@ -314,10 +314,20 @@ describe("raffinement d'arborescence", () => {
 });
 
 describe("config OAuth (secret chiffré)", () => {
+  // La suite tourne sur la base de DEV : ne pas laisser derrière soi une config
+  // OAuth factice, sinon le login GitHub répond 404 avec un client_id bidon.
+  afterAll(reset);
+
   it("stocke et relit les creds GitHub", async () => {
-    await setGitHubOAuthConfig("Iv1.client_id", "super_secret_value");
+    await setGitHubOAuthConfig("Ov23liTESTONLY123456", "super_secret_value");
     const c = await getGitHubOAuthConfig();
-    expect(c?.clientId).toBe("Iv1.client_id");
+    expect(c?.clientId).toBe("Ov23liTESTONLY123456");
     expect(c?.clientSecret).toBe("super_secret_value");
+  });
+
+  it("refuse un client_id qui ferait échouer le login", async () => {
+    await expect(
+      setGitHubOAuthConfig("Iv1.client_id", "s"),
+    ).rejects.toThrow(/GitHub App/);
   });
 });

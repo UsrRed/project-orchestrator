@@ -20,7 +20,7 @@ export function SetupForm() {
           name="clientId"
           required
           autoComplete="off"
-          placeholder="Iv1.xxxxxxxxxxxx"
+          placeholder="Ov23li… (client ID de ton OAuth App)"
           className="rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 font-mono text-neutral-100 outline-none focus:border-emerald-500"
         />
       </label>

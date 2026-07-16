@@ -11,6 +11,7 @@ import {
   parseRepoInput,
   slugifyRepoName,
 } from "@/lib/github";
+import { validateGitHubClientId } from "@/lib/oauth-config";
 import { currentUsage, resetRateLimits, tryAcquire } from "@/lib/rate-limit";
 import { parseWidget } from "@/lib/widgets";
 import { panelKeyFor } from "@/lib/phase-panel";
@@ -180,6 +181,22 @@ describe("widgets : parsing sécurisé", () => {
   it("rejette un JSON invalide / enum hors schéma", () => {
     expect(parseWidget("{pas json")).toBeNull();
     expect(parseWidget({ type: "callout", level: "danger", title: "t", body: "b" })).toBeNull();
+  });
+});
+
+describe("config OAuth GitHub", () => {
+  it("accepte les formats de client_id d'OAuth App", () => {
+    expect(validateGitHubClientId("Ov23liABCDefgh123456")).toBeNull();
+    expect(validateGitHubClientId("1234567890abcdef1234")).toBeNull();
+  });
+
+  it("rejette les valeurs qui provoqueraient un 404 au login", () => {
+    // La valeur d'exemple de la doc GitHub (cas réellement rencontré).
+    expect(validateGitHubClientId("Iv1.client_id")).toMatch(/GitHub App/);
+    expect(validateGitHubClientId("Iv1.0123456789abcdef")).toMatch(/GitHub App/);
+    expect(validateGitHubClientId("")).toMatch(/requis/);
+    expect(validateGitHubClientId("trop-court")).toMatch(/invalide/);
+    expect(validateGitHubClientId("your_client_id_here_x")).toMatch(/exemple/);
   });
 });
 

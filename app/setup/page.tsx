@@ -1,7 +1,10 @@
 import { headers } from "next/headers";
 import Link from "next/link";
 
-import { getGitHubClientIdMasked } from "@/lib/oauth-config";
+import {
+  getGitHubClientIdMasked,
+  validateGitHubClientId,
+} from "@/lib/oauth-config";
 import { SetupForm } from "./setup-form";
 
 export const dynamic = "force-dynamic";
@@ -21,6 +24,11 @@ export default async function SetupPage() {
   const githubNewAppUrl = `https://github.com/settings/applications/new?${params.toString()}`;
 
   const configuredId = await getGitHubClientIdMasked();
+  // Une config enregistrée avant la validation (ou via l'env) peut être
+  // inexploitable : GitHub répond alors un 404 opaque au login.
+  const configError = configuredId
+    ? validateGitHubClientId(configuredId)
+    : null;
 
   return (
     <main className="mx-auto flex min-h-screen max-w-xl flex-col justify-center gap-8 px-6 py-16">
@@ -38,10 +46,18 @@ export default async function SetupPage() {
         </p>
       </header>
 
-      {configuredId && (
+      {configuredId && !configError && (
         <p className="rounded-lg border border-emerald-800 bg-emerald-950/20 px-4 py-2 text-sm text-emerald-200">
           ✓ Déjà configuré — client ID <code>{configuredId}</code>. Tu peux le
           remplacer ci-dessous.
+        </p>
+      )}
+
+      {configuredId && configError && (
+        <p className="rounded-lg border border-red-800 bg-red-950/30 px-4 py-2 text-sm text-red-200">
+          ⚠ Le client ID enregistré (<code>{configuredId}</code>) est
+          inexploitable : GitHub renverra une <strong>404</strong> à la
+          connexion. {configError} Remplace-le ci-dessous.
         </p>
       )}
 
