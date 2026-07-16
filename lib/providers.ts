@@ -83,7 +83,10 @@ export const PROVIDERS: readonly ProviderInfo[] = [
     label: "OpenCode Zen (modèles gratuits)",
     methods: ["api_key"],
     apiKeyUrl: "https://opencode.ai/auth",
-    note: "Passerelle OpenAI-compatible avec des modèles à 0 $ (big-pickle, grok-code, glm-5-free…). Clé gratuite, mais le compte demande des informations de facturation ; pendant la gratuité, les échanges peuvent servir à entraîner les modèles.",
+    // Ne pas nommer de modèles ici : le catalogue bouge vite (« grok-code » et
+    // « glm-5-free », cités à l'origine, sont depuis retirés en amont). La
+    // liste à jour est sur /models.
+    note: "Passerelle OpenAI-compatible avec plusieurs modèles à 0 $. Clé gratuite, mais le compte demande des informations de facturation ; pendant la gratuité, les échanges peuvent servir à entraîner les modèles.",
   },
   {
     id: "openrouter",

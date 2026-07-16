@@ -36,8 +36,18 @@ import {
   isFreeModel,
   listCatalogModels,
   listFreeModels,
-  pickModelForTier,
+  getCatalogModel,
+  listCatalogModels as allModels,
+  pickModelForLevel,
 } from "@/lib/model-catalog";
+import {
+  assessLevel,
+  deriveLevel,
+  FAMILY_LEVELS,
+  levelOf,
+  type ModelSignals,
+} from "@/lib/intelligence";
+import { TIER_MIN_LEVEL } from "@/lib/models";
 
 describe("crypto", () => {
   it("round-trip encrypt/decrypt", () => {
@@ -275,14 +285,28 @@ describe("catalogue de modèles (models.dev)", () => {
     expect(listCatalogModels("openrouter").length).toBeGreaterThan(100);
   });
 
-  it("pickModelForTier : fast ≤ frontier (coût)", () => {
-    const fast = pickModelForTier("anthropic", "fast");
-    const frontier = pickModelForTier("anthropic", "frontier");
-    expect(fast).toBeDefined();
-    expect(frontier).toBeDefined();
-    expect(fast!.input + fast!.output).toBeLessThanOrEqual(
-      frontier!.input + frontier!.output,
-    );
+  it("pickModelForLevel : le moins cher qui atteint le niveau", () => {
+    const avance = pickModelForLevel("anthropic", 2);
+    const expert = pickModelForLevel("anthropic", 3);
+    expect(levelOf(avance!)).toBeGreaterThanOrEqual(2);
+    expect(levelOf(expert!)).toBeGreaterThanOrEqual(3);
+    // Exiger davantage ne peut pas coûter moins cher.
+    expect(expert!.input).toBeGreaterThanOrEqual(avance!.input);
+  });
+
+  it("pickModelForLevel : boost prend le plus capable, pas le moins cher", () => {
+    const normal = pickModelForLevel("anthropic", 3);
+    const boosted = pickModelForLevel("anthropic", 3, { boost: true });
+    expect(levelOf(boosted!)).toBeGreaterThan(levelOf(normal!));
+    expect(levelOf(boosted!)).toBe(4);
+    // Le boost ne descend jamais sous le plancher demandé.
+    expect(levelOf(boosted!)).toBeGreaterThanOrEqual(3);
+  });
+
+  it("pickModelForLevel : undefined plutôt qu'un repli au rabais", () => {
+    // Groq n'a aucun modèle de niveau expert : le routeur doit sauter le
+    // provider, pas lui substituer un modèle plus faible en silence.
+    expect(pickModelForLevel("groq", 4)).toBeUndefined();
   });
 
   it("findModel : provider cloud depuis le catalogue, local à coût nul", () => {
@@ -727,5 +751,183 @@ describe("runProcess", () => {
     });
     expect(r.timedOut).toBe(false);
     expect(r.stdout.trim()).toBe("pas bloqué");
+  });
+});
+
+// --- Niveaux d'intelligence ----------------------------------------------
+
+describe("niveaux d'intelligence", () => {
+  /** Modèle de test : seuls les signaux comptent. */
+  const sig = (over: Partial<ModelSignals> = {}): ModelSignals => ({
+    id: "test-model",
+    family: null,
+    input: 1,
+    output: 3,
+    context: 128_000,
+    reasoning: false,
+    release_date: "2026-06-01",
+    ...over,
+  });
+  const NOW = new Date("2026-07-16");
+
+  it("la table prime sur la dérivation", () => {
+    const haiku = sig({ id: "claude-haiku-4-5", family: "claude-haiku", input: 1 });
+    const a = assessLevel(haiku, NOW);
+    expect(a.source).toBe("family");
+    expect(a.level).toBe(FAMILY_LEVELS["claude-haiku"]);
+  });
+
+  it("une famille inconnue est dérivée, pas rejetée", () => {
+    const a = assessLevel(sig({ family: "famille-jamais-vue" }), NOW);
+    expect(a.source).toBe("derived");
+    expect(a.level).toBeGreaterThanOrEqual(0);
+  });
+
+  it("respecte la hiérarchie réelle d'Anthropic (catalogue embarqué)", () => {
+    // Le vrai test de la table : l'ordre doit refléter le produit.
+    const lvl = (id: string) => levelOf(getCatalogModel("anthropic", id)!, NOW);
+    expect(lvl("claude-haiku-4-5")).toBeLessThan(lvl("claude-sonnet-4-6"));
+    expect(lvl("claude-sonnet-4-6")).toBeLessThan(lvl("claude-opus-4-8"));
+    expect(lvl("claude-opus-4-8")).toBe(4);
+  });
+
+  it("le prix seul ne fait pas l'intelligence : plus cher ⇒ niveau ≥", () => {
+    expect(deriveLevel(sig({ input: 0.1, output: 0.1 }), NOW)).toBeLessThan(
+      deriveLevel(sig({ input: 10, output: 30 }), NOW),
+    );
+  });
+
+  it("un modèle ancien resté cher est déclassé", () => {
+    // Sinon un GPT-4o de 2024 à 5 $ est dérivé « frontière » et gagne le mode
+    // boost devant les modèles récents — constaté avant ce correctif.
+    const recent = sig({ input: 5, output: 15, release_date: "2026-05-01" });
+    const vieux = sig({ input: 5, output: 15, release_date: "2024-05-13" });
+    expect(deriveLevel(vieux, NOW)).toBeLessThan(deriveLevel(recent, NOW));
+  });
+
+  it("une petite variante est déclassée, même dans une famille curée", () => {
+    // `gpt-codex` est curé à 3, mais `-codex-mini` n'est pas son égal.
+    const gros = sig({ id: "gpt-5-codex", family: "gpt-codex" });
+    const mini = sig({ id: "gpt-5.1-codex-mini", family: "gpt-codex" });
+    expect(assessLevel(mini, NOW).level).toBe(
+      assessLevel(gros, NOW).level - 1,
+    );
+  });
+
+  it("ne pénalise pas deux fois une famille qui encode déjà la variante", () => {
+    // `gpt-mini` est curé à 2 EN TANT QUE famille de minis : re-pénaliser
+    // « gpt-4.1-mini » le ferait tomber à 1 à tort.
+    const m = sig({ id: "gpt-4.1-mini", family: "gpt-mini" });
+    expect(assessLevel(m, NOW).level).toBe(FAMILY_LEVELS["gpt-mini"]);
+  });
+
+  it("un modèle gratuit n'est jamais présumé frontière", () => {
+    const free = sig({
+      input: 0,
+      output: 0,
+      reasoning: true,
+      context: 1_000_000,
+    });
+    expect(deriveLevel(free, NOW)).toBeLessThanOrEqual(3);
+  });
+
+  it("un contexte minuscule déclasse, quel que soit le prix", () => {
+    const petit = sig({ input: 10, output: 30, context: 4_000 });
+    const grand = sig({ input: 10, output: 30, context: 200_000 });
+    expect(deriveLevel(petit, NOW)).toBeLessThan(deriveLevel(grand, NOW));
+  });
+
+  it("reste toujours dans 0..4", () => {
+    for (const m of [
+      sig({ input: 0, output: 0, context: 1_000 }),
+      sig({ input: 999, output: 999, reasoning: true, context: 10_000_000 }),
+      sig({ id: "x-mini", input: 0, output: 0, context: 512 }),
+    ]) {
+      const l = deriveLevel(m, NOW);
+      expect(l).toBeGreaterThanOrEqual(0);
+      expect(l).toBeLessThanOrEqual(4);
+    }
+  });
+});
+
+describe("catalogue : ce qui est routable", () => {
+  const PROVIDERS = [
+    "anthropic",
+    "openai",
+    "google",
+    "groq",
+    "openrouter",
+    "opencode",
+  ] as const;
+
+  it("aucun modèle non textuel ni embedding n'est routable", () => {
+    // Le catalogue mélange générateurs d'images, audio et embeddings ; la
+    // sélection « le plus cher » pouvait élire un modèle d'image.
+    for (const p of PROVIDERS) {
+      for (const m of allModels(p)) {
+        expect(m.maxOutput).toBeGreaterThanOrEqual(256);
+        expect(m.context).toBeGreaterThan(0);
+        expect(m.id).not.toMatch(/embed/i);
+      }
+    }
+    // Piège : models.dev range la **dimension** des embeddings OpenAI dans
+    // `limit.output` (1536, 3072…) et leur déclare une sortie « text » — ils
+    // franchissaient donc le seuil numérique. Seul le nom les trahit.
+    expect(getCatalogModel("google", "gemini-embedding-001")).toBeUndefined();
+    expect(getCatalogModel("openai", "text-embedding-3-large")).toBeUndefined();
+  });
+
+  it("le routage respecte le niveau minimum de chaque tier", () => {
+    for (const p of PROVIDERS) {
+      for (const tier of ["fast", "frontier"] as const) {
+        const spec = findModel(p, tier);
+        if (!spec) continue; // provider sans modèle assez capable : légitime.
+        expect(spec.level).toBeGreaterThanOrEqual(TIER_MIN_LEVEL[tier]);
+      }
+    }
+  });
+
+  it("un gratuit trop faible n'est pas retenu pour une tâche experte", () => {
+    for (const p of PROVIDERS) {
+      const free = findFreeModel(p, "frontier");
+      if (free) expect(free.level).toBeGreaterThanOrEqual(TIER_MIN_LEVEL.frontier);
+    }
+  });
+});
+
+describe("mode boost", () => {
+  const keys = {
+    opencode: { method: "api_key" as const, secret: "x" },
+    anthropic: { method: "api_key" as const, secret: "x" },
+  };
+
+  it("boost : la capacité passe devant la gratuité", () => {
+    // Sans cette règle, un gratuit atteignant tout juste le plancher gagnerait
+    // toujours et « boost » ne monterait jamais plus haut : le mode serait mort.
+    const normal = selectModelChain("frontier", keys);
+    const boosted = selectModelChain("frontier", keys, { boost: true });
+
+    expect(normal[0]!.inputPerMTok).toBe(0); // normal → gratuit d'abord
+    expect(boosted[0]!.level).toBe(4); // boost → le plus capable d'abord
+    expect(boosted[0]!.level).toBeGreaterThan(normal[0]!.level);
+  });
+
+  it("boost : la chaîne est triée par capacité décroissante", () => {
+    const chain = selectModelChain("frontier", keys, { boost: true });
+    for (let i = 1; i < chain.length; i++) {
+      expect(chain[i]!.level).toBeLessThanOrEqual(chain[i - 1]!.level);
+    }
+  });
+
+  it("boost : n'abaisse jamais le plancher du tier", () => {
+    for (const chain of [
+      selectModelChain("fast", keys, { boost: true }),
+      selectModelChain("frontier", keys, { boost: true }),
+    ]) {
+      expect(chain.length).toBeGreaterThan(0);
+    }
+    for (const s of selectModelChain("frontier", keys, { boost: true })) {
+      expect(s.level).toBeGreaterThanOrEqual(TIER_MIN_LEVEL.frontier);
+    }
   });
 });

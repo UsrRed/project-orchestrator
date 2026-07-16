@@ -60,7 +60,9 @@ async function main(): Promise<void> {
     }
 
     const engine =
-      claimed.engine === "cli" ? `cli:${claimed.engineCli}` : "llm";
+      claimed.engine === "cli"
+        ? `cli:${claimed.engineCli}`
+        : `llm${claimed.boost ? "+boost" : ""}`;
     console.log(
       `[worker] run ${claimed.id} réclamé (${engine}) — objectif: ${claimed.goal}`,
     );
@@ -82,7 +84,7 @@ async function main(): Promise<void> {
         console.log(`[worker] run ${claimed.id} → échec (aucune clé)`);
         continue;
       }
-      deps = makeAutonomousDeps(claimed.userId, keys);
+      deps = makeAutonomousDeps(claimed.userId, keys, { boost: claimed.boost });
     }
 
     try {

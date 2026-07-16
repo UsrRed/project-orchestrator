@@ -237,6 +237,7 @@ export async function startRunAction(
   // champ : c'est un choix unique côté utilisateur.
   const engineChoice = String(formData.get("engine") ?? "llm");
   const isCli = engineChoice !== "llm";
+  const boost = formData.get("boost") === "on";
   const maxIterations = Math.min(
     Math.max(Number(formData.get("maxIterations") ?? (isCli ? 1 : 5)), 1),
     20,
@@ -292,6 +293,7 @@ export async function startRunAction(
     goal,
     engine: isCli ? "cli" : "llm",
     engineCli: isCli ? engineChoice : undefined,
+    boost,
     maxIterations,
     maxCostUsd,
     timeoutMs: timeoutMin * 60_000,

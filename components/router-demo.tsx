@@ -49,6 +49,22 @@ export function RouterDemo() {
           </select>
         </label>
 
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            name="boost"
+            className="mt-1 accent-emerald-500"
+          />
+          <span>
+            <span className="text-neutral-300">Boost</span>
+            <span className="block text-xs text-neutral-500">
+              Prendre le modèle le plus capable au lieu du moins cher qui
+              atteint le niveau requis. Plus cher, à réserver aux tâches où la
+              qualité prime.
+            </span>
+          </span>
+        </label>
+
         <button
           type="submit"
           disabled={pending}
@@ -75,7 +91,28 @@ export function RouterDemo() {
               <dt className="text-neutral-500">modèle</dt>
               <dd>{state.model}</dd>
               <dt className="text-neutral-500">tier</dt>
-              <dd>{state.tier}</dd>
+              <dd>
+                {state.tier}
+                {state.boost && (
+                  <span className="ml-2 rounded bg-fuchsia-950/60 px-1.5 py-0.5 text-[10px] text-fuchsia-300">
+                    boost
+                  </span>
+                )}
+              </dd>
+              {state.level !== undefined && (
+                <>
+                  <dt className="text-neutral-500">intelligence</dt>
+                  <dd>
+                    niveau {state.level}
+                    {state.minLevel !== undefined && (
+                      <span className="text-neutral-500">
+                        {" "}
+                        (requis : ≥ {state.minLevel})
+                      </span>
+                    )}
+                  </dd>
+                </>
+              )}
               {state.reason && (
                 <>
                   <dt className="text-neutral-500">raison</dt>

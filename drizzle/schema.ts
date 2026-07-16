@@ -423,6 +423,12 @@ export const autonomousRuns = pgTable("autonomous_runs", {
   engine: text("engine").notNull().default("llm"),
   /** Quel CLI quand `engine = 'cli'` : claude | gemini | opencode. */
   engineCli: text("engine_cli"),
+  /**
+   * Mode « boost » : router vers le modèle le plus capable au lieu du moins
+   * cher atteignant le niveau requis. Ne concerne que `engine = 'llm'` (un
+   * agent CLI choisit son modèle lui-même).
+   */
+  boost: boolean("boost").notNull().default(false),
   /** Garde-fous. */
   maxIterations: integer("max_iterations").notNull().default(5),
   maxCostUsd: numeric("max_cost_usd", { precision: 12, scale: 6 })

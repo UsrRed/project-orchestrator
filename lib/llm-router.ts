@@ -49,6 +49,12 @@ export interface RouteRequest {
   contextTokens?: number;
   /** Forcer un tier (bypass de l'heuristique) — utile pour tests/overrides. */
   forceTier?: Tier;
+  /**
+   * Mode « boost » : prendre le modèle le **plus capable** disponible au lieu du
+   * moins cher atteignant le niveau requis. Le tier (donc le niveau plancher)
+   * est inchangé — le boost n'abaisse jamais l'exigence, il paie pour dépasser.
+   */
+  boost?: boolean;
 }
 
 /** Connexion déchiffrée à un provider (méthode + secret éventuel). */
@@ -184,8 +190,12 @@ const PREFERENCE: Record<Tier, readonly Provider[]> = {
  * Choisit le meilleur modèle disponible pour un tier, parmi les providers dont
  * une clé est fournie. Lève une erreur si aucun provider n'est disponible.
  */
-export function selectModel(tier: Tier, keys: ProviderKeys): ModelSpec {
-  const first = selectModelChain(tier, keys)[0];
+export function selectModel(
+  tier: Tier,
+  keys: ProviderKeys,
+  opts: ChainOptions = {},
+): ModelSpec {
+  const first = selectModelChain(tier, keys, opts)[0];
   if (!first) {
     throw new Error(
       `Aucun provider disponible pour le tier « ${tier} ». Ajoutez au moins une clé API.`,
@@ -194,15 +204,34 @@ export function selectModel(tier: Tier, keys: ProviderKeys): ModelSpec {
   return first;
 }
 
+export interface ChainOptions {
+  /** Cf. `RouteRequest.boost` : le plus capable plutôt que le moins cher. */
+  boost?: boolean;
+}
+
 /**
  * Chaîne de fallback : tous les modèles disponibles pour un tier, dans l'ordre
- * de préférence. Le routeur les essaie successivement jusqu'au premier succès.
+ * où le routeur les essaiera jusqu'au premier succès.
  *
- * Les modèles **gratuits** (local, OpenCode Zen, OpenRouter `:free`) passent en
- * tête — à qualité suffisante pour le tier, dépenser n'a pas de sens — et le
- * payant reste en repli quand le gratuit échoue ou sature ses quotas.
+ * Chaque candidat atteint **au moins** le niveau d'intelligence requis par le
+ * tier (`TIER_MIN_LEVEL`) : un provider qui n'a rien d'assez capable est sauté
+ * plutôt que de fournir un repli au rabais — un fallback ne doit pas dégrader
+ * la tâche en silence.
+ *
+ * Deux ordres, selon le mode :
+ *  - **normal** — les modèles **gratuits** (local, OpenCode Zen, OpenRouter
+ *    `:free`) d'abord, dans l'ordre de préférence des providers ; le payant en
+ *    repli. À niveau suffisant, dépenser n'a pas de sens.
+ *  - **boost** — par **capacité décroissante**, tous providers confondus, le
+ *    moins cher départageant les ex æquo. Garder les gratuits en tête ici
+ *    viderait le mode de son sens : un gratuit atteignant tout juste le
+ *    plancher gagnerait toujours, et « boost » ne monterait jamais plus haut.
  */
-export function selectModelChain(tier: Tier, keys: ProviderKeys): ModelSpec[] {
+export function selectModelChain(
+  tier: Tier,
+  keys: ProviderKeys,
+  opts: ChainOptions = {},
+): ModelSpec[] {
   const chain: ModelSpec[] = [];
   const seen = new Set<string>();
   const push = (spec: ModelSpec | undefined): void => {
@@ -213,11 +242,30 @@ export function selectModelChain(tier: Tier, keys: ProviderKeys): ModelSpec[] {
     chain.push(spec);
   };
 
+  if (opts.boost) {
+    const candidates: ModelSpec[] = [];
+    for (const provider of PREFERENCE[tier]) {
+      if (!keys[provider]) continue;
+      const free = findFreeModel(provider, tier, opts);
+      const paid = findModel(provider, tier, opts);
+      if (free) candidates.push(free);
+      if (paid) candidates.push(paid);
+    }
+    candidates.sort(
+      (a, b) =>
+        b.level - a.level ||
+        a.inputPerMTok + a.outputPerMTok / 3 -
+          (b.inputPerMTok + b.outputPerMTok / 3),
+    );
+    candidates.forEach(push);
+    return chain;
+  }
+
   for (const provider of PREFERENCE[tier]) {
-    if (keys[provider]) push(findFreeModel(provider, tier));
+    if (keys[provider]) push(findFreeModel(provider, tier, opts));
   }
   for (const provider of PREFERENCE[tier]) {
-    if (keys[provider]) push(findModel(provider, tier));
+    if (keys[provider]) push(findModel(provider, tier, opts));
   }
   return chain;
 }
@@ -329,6 +377,8 @@ export interface FallbackOptions {
   timeoutMs?: number;
   /** Horloge injectable (tests). */
   now?: () => number;
+  /** Cf. `RouteRequest.boost` : le plus capable plutôt que le moins cher. */
+  boost?: boolean;
 }
 
 export interface FallbackResult<T> {
@@ -358,7 +408,7 @@ export async function runWithFallback<T>(
   const now = opts.now ?? (() => Date.now());
   const timeoutMs = opts.timeoutMs ?? 60_000;
 
-  const chain = selectModelChain(tier, keys);
+  const chain = selectModelChain(tier, keys, { boost: opts.boost });
   if (chain.length === 0) {
     throw new Error(
       `Aucun provider disponible pour le tier « ${tier} ». Ajoutez au moins une clé API.`,
@@ -429,6 +479,7 @@ export async function routeAndRun(
       });
       return { value: r.text, usage: r.usage };
     },
+    { boost: req.boost },
   );
 
   const promptTokens = usage?.promptTokens ?? estimateTokens(req.prompt);
@@ -456,7 +507,7 @@ export async function routeAndRun(
  */
 export function routeOnly(req: RouteRequest, keys: ProviderKeys): RouteDecision {
   const classification = classify(req);
-  const spec = selectModel(classification.tier, keys);
+  const spec = selectModel(classification.tier, keys, { boost: req.boost });
   return {
     tier: classification.tier,
     complexity: classification.complexity,

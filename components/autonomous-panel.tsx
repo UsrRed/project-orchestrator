@@ -97,6 +97,25 @@ export function AutonomousPanel({
           </p>
         )}
 
+        {/* Sans objet en moteur CLI : l'agent choisit son modèle lui-même. */}
+        {!isCli && (
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              name="boost"
+              className="mt-1 accent-sky-500"
+            />
+            <span>
+              <span className="text-neutral-300">Boost</span>
+              <span className="block text-xs text-neutral-500">
+                Router vers le modèle le plus capable au lieu du moins cher
+                atteignant le niveau requis. Plus coûteux — le plafond ci-dessous
+                le borne.
+              </span>
+            </span>
+          </label>
+        )}
+
         {selected?.warning && !selected.available && (
           <p className="rounded-lg border border-red-900 bg-red-950/20 px-3 py-2 text-xs text-red-200">
             {selected.warning}
@@ -184,6 +203,9 @@ export function AutonomousPanel({
                 </span>
                 <span className="rounded bg-neutral-800 px-1.5 py-0.5 font-mono text-[10px] text-neutral-400">
                   {r.engine === "cli" ? r.engineCli : "llm"}
+                  {r.boost && (
+                    <span className="text-fuchsia-300"> +boost</span>
+                  )}
                 </span>
                 <span className="flex-1 truncate text-neutral-300">
                   {r.goal}

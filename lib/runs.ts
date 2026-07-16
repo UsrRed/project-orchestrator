@@ -35,6 +35,8 @@ export interface RunRow {
   engine: RunEngine;
   /** Renseigné si et seulement si `engine === "cli"`. */
   engineCli: CliAgentId | null;
+  /** Router vers le plus capable plutôt que le moins cher (moteur `llm`). */
+  boost: boolean;
   maxIterations: number;
   maxCostUsd: number;
   timeoutAt: Date | null;
@@ -59,6 +61,7 @@ function mapRow(r: typeof autonomousRuns.$inferSelect): RunRow {
     engine: r.engine === "cli" ? "cli" : "llm",
     engineCli:
       r.engineCli && isCliAgentId(r.engineCli) ? r.engineCli : null,
+    boost: r.boost,
     maxIterations: r.maxIterations,
     maxCostUsd: Number(r.maxCostUsd),
     timeoutAt: r.timeoutAt,
@@ -78,6 +81,7 @@ export interface EnqueueInput {
   goal: string;
   engine?: RunEngine;
   engineCli?: string;
+  boost?: boolean;
   maxIterations?: number;
   maxCostUsd?: number;
   timeoutMs?: number;
@@ -125,6 +129,8 @@ export async function enqueueRun(
       goal,
       engine,
       engineCli: engine === "cli" ? (input.engineCli as CliAgentId) : null,
+      // Sans objet pour un agent CLI, qui choisit son modèle lui-même.
+      boost: engine === "llm" && Boolean(input.boost),
       maxIterations: input.maxIterations ?? DEFAULT_MAX_ITERATIONS[engine],
       maxCostUsd: (input.maxCostUsd ?? 0.5).toFixed(6),
       timeoutAt,

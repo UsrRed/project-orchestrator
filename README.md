@@ -74,6 +74,7 @@ lib/
   cli-availability.ts Détection des CLI installés (PATH)
   process.ts          Unique site de spawn : kill de groupe, timeout, env filtré
   workspace.ts        Workspaces disque : clone/init du dépôt d'un projet
+  intelligence.ts     Niveau d'intelligence par modèle (table curée + dérivation)
   normes.ts           CRUD normes, association par phase, préprompt traçable
   widgets.ts          Schéma Zod fixe des widgets + parsing sécurisé (M6)
   models.ts           Catalogue de modèles + tarification (calcul du coût réel)
@@ -179,6 +180,62 @@ La queue est **maison** (Postgres + worker), sans service externe :
 2. Le run est mis en file (`autonomous_runs`, statut `queued`).
 3. Le **worker** (`npm run worker`, processus séparé) réclame le run (`FOR UPDATE SKIP LOCKED`), l'exécute par itérations, vérifie les garde-fous **à chaque étape**, persiste coût et progression, produit un `Artifact`, puis notifie la fin (statut + raison d'arrêt).
 4. Un **kill switch** dans l'UI arrête un run en cours ; un worker qui crashe laisse le run repris automatiquement (verrou périmé).
+
+## Niveau d'intelligence & routage
+
+Chaque modèle du catalogue porte un **niveau d'intelligence** sur 5 crans —
+`0 basique · 1 standard · 2 avancé · 3 expert · 4 frontière` — et c'est **l'axe
+du routage** ([lib/intelligence.ts](lib/intelligence.ts)).
+
+**models.dev ne publie aucun score de capacité** : ces niveaux sont donc
+produits ici, par deux voies complémentaires.
+
+1. **Table curée par famille** — models.dev regroupe les modèles en familles
+   stables (`claude-opus`, `gpt-nano`, `gemini-flash`…). La table encode ce
+   qu'on sait de ces familles ; c'est une **correction là où le prix ment**
+   (un Haiku à 1 $ n'est pas « standard », un DeepSeek de raisonnement à 0,43 $
+   non plus).
+2. **Dérivation par signaux** — pour tout le reste : prix pondéré, raisonnement,
+   contexte, âge. Les familles **hétérogènes** en relèvent volontairement
+   (`gpt` couvre 45 modèles de 0,50 $ à 30 $ : un niveau unique y serait faux).
+
+Deux ajustements s'appliquent quelle que soit l'origine du niveau, parce qu'ils
+décrivent le modèle et non la méthode : une **petite variante** (`-mini`,
+`-nano`, `-lite`) perd un cran, et un modèle de **plus de 18 mois** aussi — le
+prix des anciens modèles ne baisse pas quand l'état de l'art avance, et sans ça
+un GPT-4o de 2024 à 5 $ est dérivé « frontière » et gagne le mode boost.
+
+Répartition actuelle sur les 459 modèles routables : 51 % niveau issu de la
+table, 49 % dérivé.
+
+### Politique de sélection
+
+- **Par défaut** — le **moins cher qui atteint le niveau requis** par la tâche
+  (`fast` ≥ 2, `frontier` ≥ 3, cf. `TIER_MIN_LEVEL`), en essayant d'abord les
+  modèles à 0 $. On ne paie pas un modèle frontière pour ce qu'un modèle avancé
+  traite.
+- **Boost** (case à cocher, démo routeur et runs autonomes) — le **plus capable**
+  d'abord, tous providers confondus, le moins cher départageant les ex æquo.
+  Les gratuits n'y gardent pas la priorité : sinon un gratuit atteignant tout
+  juste le plancher gagnerait toujours et le mode ne servirait à rien.
+- Un provider **sans modèle assez capable est sauté** plutôt que de fournir un
+  repli au rabais (Groq n'a rien de niveau expert → il ne sert pas les tâches
+  `frontier`). Un fallback ne doit pas dégrader la tâche en silence.
+
+Les tiers `fast`/`frontier` restent l'API du routeur : ils ne désignent plus un
+prix mais un **niveau minimum requis**.
+
+> ⚠️ Ces niveaux sont des **estimations datées**, pas des mesures. La table
+> reflète ce qui était su en 2026-07 et doit être révisée ; l'UI marque d'un
+> `~` les niveaux déduits.
+
+Le **modèle local** (LM Studio / Ollama) est inconnaissable : on le suppose
+niveau 3 pour qu'il reste utilisable partout comme avant. Ajuste avec
+`LOCAL_AI_LEVEL` si le modèle chargé est plus faible (ou plus fort).
+
+Le catalogue est par ailleurs filtré de ce qui n'est pas routable — modèles
+retirés, non textuels (image/audio), embeddings — car la sélection « le plus
+cher » pouvait élire un générateur d'images comme haut de gamme d'un provider.
 
 ## Moteur « agent CLI » — faire écrire du code
 

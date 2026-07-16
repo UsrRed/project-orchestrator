@@ -16,7 +16,7 @@ import {
 } from "@/lib/keys";
 import { recordExecution } from "@/lib/executions";
 import { getCurrentUserId } from "@/lib/users";
-import type { Provider } from "@/lib/models";
+import { TIER_MIN_LEVEL, type Provider } from "@/lib/models";
 import {
   isMethodSupported,
   type ConnMethod,
@@ -30,6 +30,10 @@ export interface RouteFormState {
   model?: string;
   provider?: string;
   tier?: string;
+  /** Niveau d'intelligence du modèle retenu, et niveau exigé par le tier. */
+  level?: number;
+  minLevel?: number;
+  boost?: boolean;
   reason?: string;
   costUsd?: number;
   promptTokens?: number;
@@ -62,6 +66,7 @@ export async function routeAction(
   const prompt = String(formData.get("prompt") ?? "").trim();
   const rawKind = String(formData.get("kind") ?? "generic");
   const kind = (VALID_KINDS.has(rawKind) ? rawKind : "generic") as TaskKind;
+  const boost = formData.get("boost") === "on";
 
   if (!prompt) {
     return { ok: false, message: "Le prompt est vide.", executed: false };
@@ -69,7 +74,7 @@ export async function routeAction(
 
   const userId = await getCurrentUserId();
   const keys = await getProviderConnections(userId);
-  const req: RouteRequest = { prompt, kind };
+  const req: RouteRequest = { prompt, kind, boost };
 
   // Aucune connexion configurée → décision de routage seule (dry-run), sans dépense.
   if (Object.keys(keys).length === 0) {
@@ -91,6 +96,9 @@ export async function routeAction(
         provider: decision.spec.provider,
         model: decision.spec.modelId,
         tier: decision.tier,
+        level: decision.spec.level,
+        minLevel: TIER_MIN_LEVEL[decision.tier],
+        boost,
         reason: decision.reason,
       };
     } catch (err) {
@@ -130,6 +138,9 @@ export async function routeAction(
       provider: result.decision.spec.provider,
       model: result.decision.spec.modelId,
       tier: result.decision.tier,
+      level: result.decision.spec.level,
+      minLevel: TIER_MIN_LEVEL[result.decision.tier],
+      boost,
       reason: result.decision.reason,
       costUsd: result.costUsd,
       promptTokens: result.promptTokens,

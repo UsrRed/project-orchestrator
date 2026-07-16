@@ -85,6 +85,13 @@
       "when": 1784218387221,
       "tag": "0011_secret_gauntlet",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1784221690053,
+      "tag": "0012_lame_vulture",
+      "breakpoints": true
     }
   ]
 }

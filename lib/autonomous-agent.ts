@@ -36,6 +36,14 @@ const stepSchema = z.object({
     .describe("Artefact final quand done=true, sinon null."),
 });
 
+export interface AutonomousOptions {
+  /**
+   * Mode « boost » du run : router vers le modèle le plus capable plutôt que le
+   * moins cher atteignant le niveau requis (cf. [llm-router.ts](llm-router.ts)).
+   */
+  boost?: boolean;
+}
+
 /**
  * Construit un `WorkerDeps` réel pour un utilisateur et un jeu de clés donnés.
  * `keys` doit contenir au moins un provider (vérifié par l'appelant).
@@ -43,6 +51,7 @@ const stepSchema = z.object({
 export function makeAutonomousDeps(
   userId: string,
   keys: ProviderKeys,
+  opts: AutonomousOptions = {},
 ): WorkerDeps {
   const stepFn: StepFn = async (ctx) => {
     const taskCtx = await getTaskContext(userId, ctx.taskId);
@@ -80,6 +89,7 @@ export function makeAutonomousDeps(
         });
         return { value: r.object, usage: r.usage };
       },
+      { boost: opts.boost },
     );
 
     const promptTokens = usage?.promptTokens ?? 0;
