@@ -11,6 +11,32 @@ import type { CoworkOptionsData } from "@/lib/conversation";
 
 const INITIAL: ChatState = { ok: false, message: "" };
 
+/**
+ * Les actions renvoient déjà leurs erreurs métier dans le `ChatState`. Restent
+ * les pannes de transport (serveur qui recompile, réseau coupé, réponse
+ * inattendue) : `useActionState` les relance pendant le rendu, ce qui fait
+ * tomber toute la page sur l'overlay. On les rattrape ici pour n'afficher
+ * qu'un message dans le composeur — la conversation reste lisible.
+ */
+function resilient(
+  action: (prev: ChatState, formData: FormData) => Promise<ChatState>,
+): (prev: ChatState, formData: FormData) => Promise<ChatState> {
+  return async (prev, formData) => {
+    try {
+      return await action(prev, formData);
+    } catch (err) {
+      console.error("Échec de l'appel au serveur :", err);
+      return {
+        ok: false,
+        message: "Le serveur n'a pas répondu correctement. Réessaie.",
+      };
+    }
+  };
+}
+
+const SEND = resilient(sendMessageAction);
+const CHOOSE = resilient(chooseOptionAction);
+
 export function TaskChat({
   taskId,
   mode,
@@ -22,14 +48,8 @@ export function TaskChat({
   awaitingChoice: boolean;
   pendingOptions: CoworkOptionsData | null;
 }) {
-  const [sendState, sendAction, sending] = useActionState(
-    sendMessageAction,
-    INITIAL,
-  );
-  const [chooseState, chooseAction, choosing] = useActionState(
-    chooseOptionAction,
-    INITIAL,
-  );
+  const [sendState, sendAction, sending] = useActionState(SEND, INITIAL);
+  const [chooseState, chooseAction, choosing] = useActionState(CHOOSE, INITIAL);
 
   // Point d'arrêt Cowork : l'agent attend un choix.
   if (awaitingChoice && pendingOptions) {
