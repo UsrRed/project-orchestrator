@@ -10,7 +10,7 @@
 import { generateObject } from "ai";
 import { z } from "zod";
 
-import { buildModel, selectModel, type ProviderKeys } from "@/lib/llm-router";
+import { runWithFallback, type ProviderKeys } from "@/lib/llm-router";
 import { computeCostUsd, type ModelSpec } from "@/lib/models";
 import type { TaskContext } from "@/lib/conversation";
 
@@ -108,20 +108,24 @@ export async function generateWidget(
   const trimmed = instruction.trim();
   if (!trimmed) throw new Error("Décris le widget à générer.");
 
-  const spec = selectModel("frontier", keys);
-  const apiKey = keys[spec.provider];
-  if (!apiKey) throw new Error(`Clé manquante pour ${spec.provider}.`);
-  const model = buildModel(spec, apiKey);
-
-  const { object, usage } = await generateObject({
-    model,
-    schema: widgetSchema,
-    mode: "json",
-    system:
-      `Tu génères un widget d'aide à la décision pour la tâche « ${ctx.taskTitle} » ` +
-      `(projet ${ctx.projectType}). ${WIDGET_HINT}`,
-    prompt: trimmed,
-  });
+  const { value: object, usage, spec } = await runWithFallback(
+    "frontier",
+    keys,
+    async (model, _spec, signal) => {
+      const r = await generateObject({
+        model,
+        schema: widgetSchema,
+        mode: "json",
+        system:
+          `Tu génères un widget d'aide à la décision pour la tâche « ${ctx.taskTitle} » ` +
+          `(projet ${ctx.projectType}). ${WIDGET_HINT}`,
+        prompt: trimmed,
+        abortSignal: signal,
+        maxRetries: 1,
+      });
+      return { value: r.object, usage: r.usage };
+    },
+  );
 
   const promptTokens = usage?.promptTokens ?? 0;
   const completionTokens = usage?.completionTokens ?? 0;

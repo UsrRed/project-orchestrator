@@ -24,6 +24,7 @@ import {
   type Provider,
   type Tier,
 } from "@/lib/models";
+import { tryAcquire } from "@/lib/rate-limit";
 
 // --- Entrées / sorties ---------------------------------------------------
 
@@ -156,14 +157,27 @@ const PREFERENCE: Record<Tier, readonly Provider[]> = {
  * une clé est fournie. Lève une erreur si aucun provider n'est disponible.
  */
 export function selectModel(tier: Tier, keys: ProviderKeys): ModelSpec {
+  const first = selectModelChain(tier, keys)[0];
+  if (!first) {
+    throw new Error(
+      `Aucun provider disponible pour le tier « ${tier} ». Ajoutez au moins une clé API.`,
+    );
+  }
+  return first;
+}
+
+/**
+ * Chaîne de fallback : tous les modèles disponibles pour un tier, dans l'ordre
+ * de préférence. Le routeur les essaie successivement jusqu'au premier succès.
+ */
+export function selectModelChain(tier: Tier, keys: ProviderKeys): ModelSpec[] {
+  const chain: ModelSpec[] = [];
   for (const provider of PREFERENCE[tier]) {
     if (!keys[provider]) continue;
     const spec = findModel(provider, tier);
-    if (spec) return spec;
+    if (spec) chain.push(spec);
   }
-  throw new Error(
-    `Aucun provider disponible pour le tier « ${tier} ». Ajoutez au moins une clé API.`,
-  );
+  return chain;
 }
 
 // --- Instanciation du modèle SDK ----------------------------------------
@@ -211,6 +225,119 @@ export function buildModel(spec: ModelSpec, apiKey: string): LanguageModel {
   }
 }
 
+// --- Fiabilité : circuit-breaker + fallback multi-provider ---------------
+
+interface BreakerState {
+  failures: number;
+  openUntil: number;
+}
+const breakers = new Map<Provider, BreakerState>();
+const CB_THRESHOLD = 3; // échecs consécutifs avant ouverture
+const CB_COOLDOWN_MS = 30_000; // durée d'ouverture (provider sauté)
+
+function breakerOpen(provider: Provider, now: number): boolean {
+  const b = breakers.get(provider);
+  return b ? now < b.openUntil : false;
+}
+function recordFailure(provider: Provider, now: number): void {
+  const b = breakers.get(provider) ?? { failures: 0, openUntil: 0 };
+  b.failures += 1;
+  if (b.failures >= CB_THRESHOLD) b.openUntil = now + CB_COOLDOWN_MS;
+  breakers.set(provider, b);
+}
+function recordSuccess(provider: Provider): void {
+  breakers.delete(provider);
+}
+/** Réinitialise l'état du circuit-breaker (tests). */
+export function resetBreakers(): void {
+  breakers.clear();
+}
+
+export interface LlmUsage {
+  promptTokens?: number;
+  completionTokens?: number;
+}
+
+export interface FallbackOptions {
+  /** Délai avant abandon d'un provider (ms). Défaut 60s. */
+  timeoutMs?: number;
+  /** Horloge injectable (tests). */
+  now?: () => number;
+}
+
+export interface FallbackResult<T> {
+  value: T;
+  usage?: LlmUsage;
+  spec: ModelSpec;
+}
+
+/**
+ * Exécute un appel LLM avec fiabilité : parcourt la chaîne de fallback du tier
+ * (providers disponibles, non ouverts au circuit-breaker, sous la limite de
+ * rate), applique un timeout par tentative, et bascule au provider suivant en
+ * cas d'échec (le retry par tentative est géré par le SDK via `maxRetries`
+ * côté `exec`). Renvoie le résultat du premier succès + le `spec` retenu, ou
+ * lève une erreur agrégée si tous échouent.
+ */
+export async function runWithFallback<T>(
+  tier: Tier,
+  keys: ProviderKeys,
+  exec: (
+    model: LanguageModel,
+    spec: ModelSpec,
+    signal: AbortSignal,
+  ) => Promise<{ value: T; usage?: LlmUsage }>,
+  opts: FallbackOptions = {},
+): Promise<FallbackResult<T>> {
+  const now = opts.now ?? (() => Date.now());
+  const timeoutMs = opts.timeoutMs ?? 60_000;
+
+  const chain = selectModelChain(tier, keys);
+  if (chain.length === 0) {
+    throw new Error(
+      `Aucun provider disponible pour le tier « ${tier} ». Ajoutez au moins une clé API.`,
+    );
+  }
+
+  const errors: string[] = [];
+  for (const spec of chain) {
+    const provider = spec.provider;
+    if (breakerOpen(provider, now())) {
+      errors.push(`${provider}: circuit ouvert`);
+      continue;
+    }
+    if (!tryAcquire(provider, now())) {
+      errors.push(`${provider}: limite de débit atteinte`);
+      continue;
+    }
+    const apiKey = keys[provider];
+    if (!apiKey) {
+      errors.push(`${provider}: clé manquante`);
+      continue;
+    }
+
+    const model = buildModel(spec, apiKey);
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const res = await exec(model, spec, ac.signal);
+      recordSuccess(provider);
+      return { value: res.value, usage: res.usage, spec };
+    } catch (err) {
+      recordFailure(provider, now());
+      errors.push(
+        `${provider}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  throw new Error(
+    `Tous les providers ont échoué pour le tier « ${tier} » : ${errors.join(" | ")}`,
+  );
+}
+
 // --- Point d'entrée principal -------------------------------------------
 
 /**
@@ -222,20 +349,21 @@ export async function routeAndRun(
   keys: ProviderKeys,
 ): Promise<RouteResult> {
   const classification = classify(req);
-  const spec = selectModel(classification.tier, keys);
 
-  const apiKey = keys[spec.provider];
-  if (!apiKey) {
-    throw new Error(`Clé manquante pour le provider ${spec.provider}.`);
-  }
-
-  const model = buildModel(spec, apiKey);
-
-  const { text, usage } = await generateText({
-    model,
-    system: req.system,
-    prompt: req.prompt,
-  });
+  const { value: text, usage, spec } = await runWithFallback(
+    classification.tier,
+    keys,
+    async (model, _spec, signal) => {
+      const r = await generateText({
+        model,
+        system: req.system,
+        prompt: req.prompt,
+        abortSignal: signal,
+        maxRetries: 1,
+      });
+      return { value: r.text, usage: r.usage };
+    },
+  );
 
   const promptTokens = usage?.promptTokens ?? estimateTokens(req.prompt);
   const completionTokens = usage?.completionTokens ?? estimateTokens(text);

@@ -12,7 +12,7 @@ import "server-only";
 import { generateObject } from "ai";
 import { z } from "zod";
 
-import { buildModel, selectModel, type ProviderKeys } from "@/lib/llm-router";
+import { runWithFallback, type ProviderKeys } from "@/lib/llm-router";
 import { computeCostUsd } from "@/lib/models";
 import { addArtifact, addMessage, getTaskContext, listMessages } from "@/lib/conversation";
 import { recordExecution } from "@/lib/executions";
@@ -52,30 +52,34 @@ export function makeAutonomousDeps(
       .map((m, i) => `${i + 1}. ${m.content}`)
       .join("\n");
 
-    const spec = selectModel("fast", keys);
-    const apiKey = keys[spec.provider];
-    if (!apiKey) throw new Error(`Clé manquante pour ${spec.provider}.`);
-    const model = buildModel(spec, apiKey);
-
     const norms = await buildPhaseNormsContext(userId, taskCtx.phaseId);
 
     const startedAt = new Date();
-    const { object, usage } = await generateObject({
-      model,
-      schema: stepSchema,
-      mode: "json",
-      system:
-        (norms.text ? norms.text + "\n\n" : "") +
-        `Tu es un agent autonome travaillant sur la tâche « ${taskCtx.taskTitle} » ` +
-        `du projet « ${taskCtx.projectName} » (${taskCtx.projectType}). ` +
-        "Avance par petites étapes concrètes vers l'objectif. Quand il est " +
-        "atteint, mets done=true et fournis l'artefact final.",
-      prompt:
-        `Objectif du run : ${ctx.goal}\n` +
-        `Itération : ${ctx.iteration + 1}\n` +
-        (priorNotes ? `Progression jusqu'ici :\n${priorNotes}\n` : "") +
-        "\nRéalise la prochaine étape.",
-    });
+    const { value: object, usage, spec } = await runWithFallback(
+      "fast",
+      keys,
+      async (model, _spec, signal) => {
+        const r = await generateObject({
+          model,
+          schema: stepSchema,
+          mode: "json",
+          system:
+            (norms.text ? norms.text + "\n\n" : "") +
+            `Tu es un agent autonome travaillant sur la tâche « ${taskCtx.taskTitle} » ` +
+            `du projet « ${taskCtx.projectName} » (${taskCtx.projectType}). ` +
+            "Avance par petites étapes concrètes vers l'objectif. Quand il est " +
+            "atteint, mets done=true et fournis l'artefact final.",
+          prompt:
+            `Objectif du run : ${ctx.goal}\n` +
+            `Itération : ${ctx.iteration + 1}\n` +
+            (priorNotes ? `Progression jusqu'ici :\n${priorNotes}\n` : "") +
+            "\nRéalise la prochaine étape.",
+          abortSignal: signal,
+          maxRetries: 1,
+        });
+        return { value: r.object, usage: r.usage };
+      },
+    );
 
     const promptTokens = usage?.promptTokens ?? 0;
     const completionTokens = usage?.completionTokens ?? 0;

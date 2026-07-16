@@ -14,11 +14,7 @@
 import { generateObject, generateText, type CoreMessage } from "ai";
 import { z } from "zod";
 
-import {
-  buildModel,
-  selectModel,
-  type ProviderKeys,
-} from "@/lib/llm-router";
+import { runWithFallback, type ProviderKeys } from "@/lib/llm-router";
 import { computeCostUsd, type ModelSpec, type Tier } from "@/lib/models";
 import type { CoworkOptionsData, TaskContext } from "@/lib/conversation";
 
@@ -72,13 +68,6 @@ function metaFrom(
   };
 }
 
-function modelFor(tier: Tier, keys: ProviderKeys): { spec: ModelSpec; model: ReturnType<typeof buildModel> } {
-  const spec = selectModel(tier, keys);
-  const apiKey = keys[spec.provider];
-  if (!apiKey) throw new Error(`Clé manquante pour ${spec.provider}.`);
-  return { spec, model: buildModel(spec, apiKey) };
-}
-
 // --- Mode Manuel : réponse réactive -------------------------------------
 
 export interface ManualResult extends LlmMeta {
@@ -91,12 +80,20 @@ export async function manualReply(
   keys: ProviderKeys,
   normsText?: string,
 ): Promise<ManualResult> {
-  const { spec, model } = modelFor("fast", keys);
-  const { text, usage } = await generateText({
-    model,
-    system: systemPrompt(ctx, normsText),
-    messages: toCoreMessages(history),
-  });
+  const { value: text, usage, spec } = await runWithFallback(
+    "fast",
+    keys,
+    async (model, _spec, signal) => {
+      const r = await generateText({
+        model,
+        system: systemPrompt(ctx, normsText),
+        messages: toCoreMessages(history),
+        abortSignal: signal,
+        maxRetries: 1,
+      });
+      return { value: r.text, usage: r.usage };
+    },
+  );
   return { text, ...metaFrom(spec, "fast", usage) };
 }
 
@@ -130,17 +127,25 @@ export async function proposeCoworkOptions(
   keys: ProviderKeys,
   normsText?: string,
 ): Promise<OptionsResult> {
-  const { spec, model } = modelFor("frontier", keys);
-  const { object, usage } = await generateObject({
-    model,
-    schema: coworkOptionsSchema,
-    mode: "json",
-    system:
-      systemPrompt(ctx, normsText) +
-      "\n\nMode COWORK : propose 3 options distinctes pour avancer, puis " +
-      "attends le choix de l'utilisateur. Ne tranche pas à sa place.",
-    messages: toCoreMessages(history),
-  });
+  const { value: object, usage, spec } = await runWithFallback(
+    "frontier",
+    keys,
+    async (model, _spec, signal) => {
+      const r = await generateObject({
+        model,
+        schema: coworkOptionsSchema,
+        mode: "json",
+        system:
+          systemPrompt(ctx, normsText) +
+          "\n\nMode COWORK : propose 3 options distinctes pour avancer, puis " +
+          "attends le choix de l'utilisateur. Ne tranche pas à sa place.",
+        messages: toCoreMessages(history),
+        abortSignal: signal,
+        maxRetries: 1,
+      });
+      return { value: r.object, usage: r.usage };
+    },
+  );
   return { data: object, ...metaFrom(spec, "frontier", usage) };
 }
 
@@ -167,18 +172,26 @@ export async function produceCoworkArtifact(
   keys: ProviderKeys,
   normsText?: string,
 ): Promise<ArtifactResult> {
-  const { spec, model } = modelFor("frontier", keys);
-  const { object, usage } = await generateObject({
-    model,
-    schema: artifactSchema,
-    mode: "json",
-    system:
-      systemPrompt(ctx, normsText) +
-      "\n\nMode COWORK : l'utilisateur a choisi une option. Produis " +
-      "l'artefact correspondant (document Markdown), concret et complet.",
-    prompt:
-      `Option retenue : « ${chosenOption.title} » — ${chosenOption.detail}\n\n` +
-      "Produis l'artefact final correspondant à ce choix.",
-  });
+  const { value: object, usage, spec } = await runWithFallback(
+    "frontier",
+    keys,
+    async (model, _spec, signal) => {
+      const r = await generateObject({
+        model,
+        schema: artifactSchema,
+        mode: "json",
+        system:
+          systemPrompt(ctx, normsText) +
+          "\n\nMode COWORK : l'utilisateur a choisi une option. Produis " +
+          "l'artefact correspondant (document Markdown), concret et complet.",
+        prompt:
+          `Option retenue : « ${chosenOption.title} » — ${chosenOption.detail}\n\n` +
+          "Produis l'artefact final correspondant à ce choix.",
+        abortSignal: signal,
+        maxRetries: 1,
+      });
+      return { value: r.object, usage: r.usage };
+    },
+  );
   return { title: object.title, content: object.content, ...metaFrom(spec, "frontier", usage) };
 }

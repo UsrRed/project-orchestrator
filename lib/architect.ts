@@ -13,7 +13,7 @@
 import { generateObject } from "ai";
 import { z } from "zod";
 
-import { buildModel, selectModel, type ProviderKeys } from "@/lib/llm-router";
+import { runWithFallback, type ProviderKeys } from "@/lib/llm-router";
 import { computeCostUsd, type ModelSpec } from "@/lib/models";
 
 export type ProjectType = "tech" | "marketing";
@@ -101,24 +101,27 @@ export async function generateArchitecture(
   const trimmed = idea.trim();
   if (!trimmed) throw new Error("L'idée de projet est vide.");
 
-  const spec = selectModel("frontier", keys);
-  const apiKey = keys[spec.provider];
-  if (!apiKey) throw new Error(`Clé manquante pour ${spec.provider}.`);
-
-  const model = buildModel(spec, apiKey);
-
-  const { object, usage } = await generateObject({
-    model,
-    schema: architectureSchema,
-    // json-mode (response_format) plutôt que tool-mode : compatible avec les
-    // serveurs OpenAI-compatible locaux (LM Studio) comme avec le cloud.
-    mode: "json",
-    system: SYSTEM_BY_TYPE[projectType],
-    prompt:
-      `Idée de projet (${projectType}) :\n"""${trimmed}"""\n\n` +
-      "Génère une arborescence de phases et de tâches cohérente, ordonnée et " +
-      "actionnable pour mener ce projet à bien.",
-  });
+  const { value: object, usage, spec } = await runWithFallback(
+    "frontier",
+    keys,
+    async (model, _spec, signal) => {
+      const r = await generateObject({
+        model,
+        schema: architectureSchema,
+        // json-mode (response_format) plutôt que tool-mode : compatible avec
+        // les serveurs OpenAI-compatible locaux (LM Studio) comme avec le cloud.
+        mode: "json",
+        system: SYSTEM_BY_TYPE[projectType],
+        prompt:
+          `Idée de projet (${projectType}) :\n"""${trimmed}"""\n\n` +
+          "Génère une arborescence de phases et de tâches cohérente, ordonnée " +
+          "et actionnable pour mener ce projet à bien.",
+        abortSignal: signal,
+        maxRetries: 1,
+      });
+      return { value: r.object, usage: r.usage };
+    },
+  );
 
   const promptTokens = usage?.promptTokens ?? 0;
   const completionTokens = usage?.completionTokens ?? 0;
