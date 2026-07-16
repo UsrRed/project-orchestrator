@@ -21,6 +21,7 @@ const RPM: Record<Provider, number> = {
   google: 15,
   openai: 60,
   openrouter: 60,
+  opencode: 60,
   anthropic: 50,
 };
 

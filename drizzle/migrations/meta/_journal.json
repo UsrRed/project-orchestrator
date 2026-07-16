@@ -64,6 +64,13 @@
       "when": 1784209894327,
       "tag": "0008_wakeful_vampiro",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1784214689206,
+      "tag": "0009_worthless_gabe_jones",
+      "breakpoints": true
     }
   ]
 }

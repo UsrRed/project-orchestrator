@@ -2,9 +2,10 @@ import Link from "next/link";
 
 import {
   fetchLocalModels,
+  isFreeModel,
   listCatalogModels,
 } from "@/lib/model-catalog";
-import { findModel } from "@/lib/models";
+import { findFreeModel, findModel } from "@/lib/models";
 import { PROVIDERS } from "@/lib/providers";
 
 export const dynamic = "force-dynamic";
@@ -24,7 +25,8 @@ export default async function ModelsPage() {
           tokens). Le routeur sélectionne par tier :{" "}
           <span className="text-emerald-400">fast</span> = le moins cher,{" "}
           <span className="text-emerald-400">frontier</span> = le plus haut de
-          gamme.
+          gamme — et dans les deux cas il tente d&apos;abord les modèles à 0 $
+          (le payant reste en repli).
         </p>
       </header>
 
@@ -37,10 +39,14 @@ export default async function ModelsPage() {
                 input: 0,
                 output: 0,
                 context: 0,
+                free: true,
               }))
-            : listCatalogModels(p.id);
-        const fast = findModel(p.id, "fast");
-        const frontier = findModel(p.id, "frontier");
+            : listCatalogModels(p.id).map((m) => ({ ...m, free: isFreeModel(m) }));
+        // Le routeur essaie le gratuit avant le payant → on montre les deux.
+        const fast = findFreeModel(p.id, "fast") ?? findModel(p.id, "fast");
+        const frontier =
+          findFreeModel(p.id, "frontier") ?? findModel(p.id, "frontier");
+        const freeCount = models.filter((m) => m.free).length;
 
         return (
           <details
@@ -50,6 +56,9 @@ export default async function ModelsPage() {
             <summary className="cursor-pointer text-sm font-semibold text-neutral-200">
               {p.label}{" "}
               <span className="text-neutral-500">— {models.length} modèles</span>
+              {freeCount > 0 && (
+                <span className="text-emerald-400"> · {freeCount} gratuits</span>
+              )}
             </summary>
 
             {p.id !== "ollama" && (fast || frontier) && (
@@ -72,7 +81,14 @@ export default async function ModelsPage() {
                   <tbody className="text-neutral-300">
                     {models.map((m) => (
                       <tr key={m.id} className="border-b border-neutral-900">
-                        <td className="py-1 pr-3 font-mono">{m.id}</td>
+                        <td className="py-1 pr-3 font-mono">
+                          {m.id}
+                          {m.free && p.id !== "ollama" && (
+                            <span className="ml-2 rounded bg-emerald-950/60 px-1.5 py-0.5 font-sans text-[10px] text-emerald-400">
+                              gratuit
+                            </span>
+                          )}
+                        </td>
                         <td className="py-1 pr-3">
                           {p.id === "ollama"
                             ? "local (gratuit)"

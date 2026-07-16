@@ -79,10 +79,18 @@ export const PROVIDERS: readonly ProviderInfo[] = [
     apiKeyUrl: "https://console.groq.com/keys",
   },
   {
+    id: "opencode",
+    label: "OpenCode Zen (modèles gratuits)",
+    methods: ["api_key"],
+    apiKeyUrl: "https://opencode.ai/auth",
+    note: "Passerelle OpenAI-compatible avec des modèles à 0 $ (big-pickle, grok-code, glm-5-free…). Clé gratuite, mais le compte demande des informations de facturation ; pendant la gratuité, les échanges peuvent servir à entraîner les modèles.",
+  },
+  {
     id: "openrouter",
     label: "OpenRouter",
     methods: ["api_key"],
     apiKeyUrl: "https://openrouter.ai/keys",
+    note: "Beaucoup de modèles `:free` à 0 $ (quotas limités) en plus du catalogue payant.",
   },
 ] as const;
 

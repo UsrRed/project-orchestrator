@@ -19,6 +19,7 @@ import { generateText, type LanguageModel } from "ai";
 
 import {
   computeCostUsd,
+  findFreeModel,
   findModel,
   type ModelSpec,
   type Provider,
@@ -159,8 +160,24 @@ export function classify(req: RouteRequest): Classification {
 /** Ordre de préférence par tier (le moins cher / le plus adapté d'abord). */
 const PREFERENCE: Record<Tier, readonly Provider[]> = {
   // Le local (ollama/LM Studio) est gratuit → préféré quand disponible.
-  fast: ["ollama", "groq", "google", "openai", "openrouter", "anthropic"],
-  frontier: ["ollama", "anthropic", "openai", "google", "openrouter", "groq"],
+  fast: [
+    "ollama",
+    "opencode",
+    "groq",
+    "google",
+    "openai",
+    "openrouter",
+    "anthropic",
+  ],
+  frontier: [
+    "ollama",
+    "opencode",
+    "anthropic",
+    "openai",
+    "google",
+    "openrouter",
+    "groq",
+  ],
 };
 
 /**
@@ -180,13 +197,27 @@ export function selectModel(tier: Tier, keys: ProviderKeys): ModelSpec {
 /**
  * Chaîne de fallback : tous les modèles disponibles pour un tier, dans l'ordre
  * de préférence. Le routeur les essaie successivement jusqu'au premier succès.
+ *
+ * Les modèles **gratuits** (local, OpenCode Zen, OpenRouter `:free`) passent en
+ * tête — à qualité suffisante pour le tier, dépenser n'a pas de sens — et le
+ * payant reste en repli quand le gratuit échoue ou sature ses quotas.
  */
 export function selectModelChain(tier: Tier, keys: ProviderKeys): ModelSpec[] {
   const chain: ModelSpec[] = [];
+  const seen = new Set<string>();
+  const push = (spec: ModelSpec | undefined): void => {
+    if (!spec) return;
+    const key = `${spec.provider}:${spec.modelId}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    chain.push(spec);
+  };
+
   for (const provider of PREFERENCE[tier]) {
-    if (!keys[provider]) continue;
-    const spec = findModel(provider, tier);
-    if (spec) chain.push(spec);
+    if (keys[provider]) push(findFreeModel(provider, tier));
+  }
+  for (const provider of PREFERENCE[tier]) {
+    if (keys[provider]) push(findModel(provider, tier));
   }
   return chain;
 }
@@ -228,6 +259,14 @@ export function buildModel(
         name: "openrouter",
         apiKey: secret,
         baseURL: "https://openrouter.ai/api/v1",
+      })(spec.modelId);
+    case "opencode":
+      // OpenCode Zen : passerelle OpenAI-compatible (clé en Bearer), d'où
+      // viennent les modèles gratuits type « big-pickle ».
+      return createOpenAICompatible({
+        name: "opencode",
+        apiKey: secret,
+        baseURL: process.env.OPENCODE_ZEN_BASE_URL ?? "https://opencode.ai/zen/v1",
       })(spec.modelId);
     case "ollama": {
       // Serveur local OpenAI-compatible (LM Studio / Ollama). La clé n'est pas

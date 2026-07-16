@@ -5,7 +5,11 @@ import { KeysManager } from "@/components/keys-manager";
 import { RouterDemo } from "@/components/router-demo";
 import { executionStats, listExecutions } from "@/lib/executions";
 import { listConnections } from "@/lib/keys";
-import { catalogModelCount, fetchLocalModels } from "@/lib/model-catalog";
+import {
+  catalogModelCount,
+  fetchLocalModels,
+  freeModelCount,
+} from "@/lib/model-catalog";
 import { PROVIDERS } from "@/lib/providers";
 import { getCurrentUserId } from "@/lib/users";
 
@@ -31,11 +35,14 @@ export default async function Home() {
     fetchLocalModels(),
   ]);
 
-  // Nombre de modèles disponibles par provider (catalogue models.dev + local).
+  // Nombre de modèles disponibles par provider (catalogue models.dev + local),
+  // et parmi eux ceux à coût nul (le local l'est intégralement).
   const modelCounts: Record<string, number> = {};
+  const freeCounts: Record<string, number> = {};
   for (const p of PROVIDERS) {
-    modelCounts[p.id] =
-      p.id === "ollama" ? localModels.length : catalogModelCount(p.id);
+    const local = p.id === "ollama";
+    modelCounts[p.id] = local ? localModels.length : catalogModelCount(p.id);
+    freeCounts[p.id] = local ? localModels.length : freeModelCount(p.id);
   }
 
   return (
@@ -83,9 +90,16 @@ export default async function Home() {
         </div>
         <p className="mb-4 text-sm text-neutral-500">
           Choisis un provider, colle ta clé — tous ses modèles deviennent
-          disponibles (catalogue models.dev). Secret stocké chiffré.
+          disponibles (catalogue models.dev). Secret stocké chiffré. Le routeur
+          essaie d&apos;abord les modèles <strong>gratuits</strong> (local,
+          OpenCode Zen « big-pickle », OpenRouter <code>:free</code>) et ne
+          bascule sur le payant qu&apos;en repli.
         </p>
-        <KeysManager connections={connections} modelCounts={modelCounts} />
+        <KeysManager
+          connections={connections}
+          modelCounts={modelCounts}
+          freeCounts={freeCounts}
+        />
       </section>
 
       <section className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">

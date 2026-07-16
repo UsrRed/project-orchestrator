@@ -10,6 +10,7 @@
  */
 import {
   getCatalogModel,
+  pickFreeModelForTier,
   pickModelForTier,
 } from "@/lib/model-catalog";
 
@@ -18,6 +19,7 @@ export type Provider =
   | "openai"
   | "google"
   | "openrouter"
+  | "opencode"
   | "groq"
   | "ollama";
 
@@ -83,6 +85,28 @@ export function findModel(
     tier,
     inputPerMTok: m.input,
     outputPerMTok: m.output,
+    contextWindow: m.context,
+  };
+}
+
+/**
+ * ModelSpec **gratuit** du tier voulu (coût nul) : modèle local, sinon meilleur
+ * modèle à 0 $ du provider (OpenCode Zen « big-pickle », OpenRouter `:free`…).
+ * `undefined` si le provider n'a aucun gratuit assez capable pour le tier.
+ */
+export function findFreeModel(
+  provider: Provider,
+  tier: Tier,
+): ModelSpec | undefined {
+  if (provider === "ollama") return localSpec(tier);
+  const m = pickFreeModelForTier(provider, tier);
+  if (!m) return undefined;
+  return {
+    provider,
+    modelId: m.id,
+    tier,
+    inputPerMTok: 0,
+    outputPerMTok: 0,
     contextWindow: m.context,
   };
 }

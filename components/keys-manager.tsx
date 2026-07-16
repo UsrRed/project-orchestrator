@@ -21,9 +21,12 @@ const INITIAL: KeyFormState = { ok: false, message: "" };
 export function KeysManager({
   connections,
   modelCounts,
+  freeCounts,
 }: {
   connections: ConnectionView[];
   modelCounts: Record<string, number>;
+  /** Modèles à coût nul par provider — le routeur les essaie en premier. */
+  freeCounts: Record<string, number>;
 }) {
   const [state, formAction, pending] = useActionState(
     addConnectionAction,
@@ -38,6 +41,7 @@ export function KeysManager({
   const method = isLocal ? "none" : oauth ? "oauth" : "api_key";
   const help = credentialHelp(provider, method);
   const count = modelCounts[provider] ?? 0;
+  const free = freeCounts[provider] ?? 0;
 
   return (
     <div className="flex flex-col gap-4">
@@ -60,6 +64,7 @@ export function KeysManager({
                 <option key={p.id} value={p.id}>
                   {p.label}
                   {modelCounts[p.id] ? ` — ${modelCounts[p.id]} modèles` : ""}
+                  {freeCounts[p.id] ? ` (${freeCounts[p.id]} gratuits)` : ""}
                 </option>
               ))}
             </select>
@@ -101,6 +106,11 @@ export function KeysManager({
               {count > 1 ? "s" : ""} pour ce provider
             </span>
           )}
+          {free > 0 && (
+            <span className="text-emerald-400">
+              dont {free} gratuit{free > 1 ? "s" : ""} — essayés en premier
+            </span>
+          )}
           {help?.url && (
             <a
               href={help.url}
@@ -120,9 +130,7 @@ export function KeysManager({
               {oauth ? "← utiliser une clé API" : "utiliser un jeton OAuth"}
             </button>
           )}
-          {isLocal && info?.note && (
-            <span className="text-neutral-500">{info.note}</span>
-          )}
+          {info?.note && <span className="text-neutral-500">{info.note}</span>}
         </div>
 
         {oauth && help?.command && (

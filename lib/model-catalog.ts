@@ -57,8 +57,12 @@ export async function refreshCatalog(): Promise<boolean> {
       const models: Record<string, CatalogModel> = {};
       for (const [mid, m] of Object.entries(p.models)) {
         const cost = (m.cost ?? {}) as { input?: number; output?: number };
+        // Coût inconnu → inexploitable par le routeur ; un coût à 0 est en
+        // revanche légitime (modèle gratuit). Même filtrage que
+        // [scripts/sync-models.ts](../scripts/sync-models.ts).
         if (cost.input == null) continue;
         const limit = (m.limit ?? {}) as { context?: number };
+        if (!limit.context) continue;
         models[mid] = {
           id: String(m.id ?? mid),
           name: String(m.name ?? mid),
@@ -96,10 +100,49 @@ export function catalogModelCount(provider: string): number {
   return Object.keys(catalog()[provider]?.models ?? {}).length;
 }
 
+/** Modèle à coût nul (OpenCode Zen « big-pickle », OpenRouter `:free`, …). */
+export function isFreeModel(m: CatalogModel): boolean {
+  return m.input === 0 && m.output === 0;
+}
+
 /**
- * Choisit un modèle par tier : `fast` = le moins cher, `frontier` = le plus
- * haut de gamme (coût le plus élevé). Heuristique simple qui reste à jour avec
- * le catalogue (pas d'id de modèle codé en dur).
+ * Modèles gratuits exploitables par le routeur (tool-calling requis : l'agent
+ * ne sait pas travailler sans), du plus grand contexte au plus petit.
+ */
+export function listFreeModels(provider: string): CatalogModel[] {
+  return listCatalogModels(provider)
+    .filter((m) => isFreeModel(m) && m.tool_call && m.context > 0)
+    .sort((a, b) => b.context - a.context);
+}
+
+export function freeModelCount(provider: string): number {
+  return listFreeModels(provider).length;
+}
+
+/** Contexte minimal exigé d'un modèle gratuit pour tenir le tier « frontier ». */
+const FREE_FRONTIER_MIN_CONTEXT = 100_000;
+
+/**
+ * Meilleur modèle **gratuit** d'un provider pour un tier, ou `undefined` s'il
+ * n'en a aucun d'assez capable. En `frontier` on exige du raisonnement et un
+ * grand contexte : un gratuit trop faible dégraderait les tâches complexes,
+ * mieux vaut alors basculer sur le payant.
+ */
+export function pickFreeModelForTier(
+  provider: string,
+  tier: "fast" | "frontier",
+): CatalogModel | undefined {
+  const free = listFreeModels(provider);
+  if (tier === "fast") return free[0];
+  return free.find((m) => m.reasoning && m.context >= FREE_FRONTIER_MIN_CONTEXT);
+}
+
+/**
+ * Choisit un modèle **payant** par tier : `fast` = le moins cher, `frontier` =
+ * le plus haut de gamme (coût le plus élevé). Heuristique simple qui reste à
+ * jour avec le catalogue (pas d'id de modèle codé en dur). Les modèles gratuits
+ * sont exclus ici et traités par `pickFreeModelForTier` (le routeur les essaie
+ * d'abord).
  */
 export function pickModelForTier(
   provider: string,

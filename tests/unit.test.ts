@@ -14,8 +14,13 @@ import {
   defaultMethod,
   isMethodSupported,
 } from "@/lib/providers";
-import { findModel, specForModel } from "@/lib/models";
-import { listCatalogModels, pickModelForTier } from "@/lib/model-catalog";
+import { findFreeModel, findModel, specForModel } from "@/lib/models";
+import {
+  isFreeModel,
+  listCatalogModels,
+  listFreeModels,
+  pickModelForTier,
+} from "@/lib/model-catalog";
 
 describe("crypto", () => {
   it("round-trip encrypt/decrypt", () => {
@@ -55,6 +60,22 @@ describe("routeur : chaîne de fallback", () => {
     const chain = selectModelChain("frontier", keys).map((s) => s.provider);
     expect(chain[0]).toBe("ollama");
     expect(chain).toContain("openai");
+  });
+
+  it("essaie les modèles gratuits avant les payants", () => {
+    const chain = selectModelChain("frontier", {
+      opencode: { method: "api_key", secret: "x" },
+      anthropic: { method: "api_key", secret: "x" },
+    });
+    const free = chain.filter((s) => s.inputPerMTok === 0);
+    const paid = chain.filter((s) => s.inputPerMTok > 0);
+    expect(free.length).toBeGreaterThan(0);
+    expect(paid.length).toBeGreaterThan(0);
+    // Tous les gratuits passent avant le premier payant.
+    expect(chain.indexOf(free[free.length - 1]!)).toBeLessThan(
+      chain.indexOf(paid[0]!),
+    );
+    expect(free[0]!.provider).toBe("opencode");
   });
 
   it("bascule au provider suivant en cas d'échec", async () => {
@@ -201,6 +222,29 @@ describe("catalogue de modèles (models.dev)", () => {
     const local = findModel("ollama", "fast");
     expect(local?.provider).toBe("ollama");
     expect(local!.inputPerMTok).toBe(0);
+  });
+
+  it("expose les modèles gratuits (OpenCode Zen, OpenRouter :free)", () => {
+    const zen = listFreeModels("opencode");
+    expect(zen.length).toBeGreaterThan(5);
+    expect(zen.every(isFreeModel)).toBe(true);
+    expect(zen.map((m) => m.id)).toContain("big-pickle");
+    const or = listFreeModels("openrouter");
+    expect(or.length).toBeGreaterThan(5);
+    expect(or.every((m) => m.id.includes("free"))).toBe(true);
+    // Aucun gratuit chez Anthropic → pas de spec gratuit.
+    expect(findFreeModel("anthropic", "fast")).toBeUndefined();
+  });
+
+  it("findFreeModel : spec à coût nul, capable pour le tier", () => {
+    const fast = findFreeModel("opencode", "fast");
+    expect(fast?.inputPerMTok).toBe(0);
+    expect(fast?.outputPerMTok).toBe(0);
+
+    const frontier = findFreeModel("opencode", "frontier");
+    expect(frontier?.inputPerMTok).toBe(0);
+    // Un gratuit ne tient le tier frontier qu'avec un grand contexte.
+    expect(frontier!.contextWindow).toBeGreaterThanOrEqual(100_000);
   });
 
   it("specForModel : construit un spec pour un modèle précis du catalogue", () => {

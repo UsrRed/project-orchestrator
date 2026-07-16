@@ -32,6 +32,7 @@ export const providerEnum = pgEnum("provider", [
   "openai",
   "google",
   "openrouter",
+  "opencode",
   "groq",
   "ollama",
 ]);

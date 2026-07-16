@@ -80,6 +80,7 @@ export async function routeAction(
         openai: { method: demo, secret: "demo" },
         google: { method: demo, secret: "demo" },
         openrouter: { method: demo, secret: "demo" },
+        opencode: { method: demo, secret: "demo" },
         groq: { method: demo, secret: "demo" },
       });
       return {
@@ -178,6 +179,7 @@ const VALID_PROVIDERS: ReadonlySet<string> = new Set<Provider>([
   "openai",
   "google",
   "openrouter",
+  "opencode",
   "groq",
   "ollama",
 ]);
