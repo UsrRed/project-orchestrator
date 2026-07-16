@@ -21,6 +21,7 @@ import { makeAutonomousDeps } from "@/lib/autonomous-agent";
 import { makeCliAgentDeps } from "@/lib/cli-agent";
 import { cliAgentInfo, isCliAgentId } from "@/lib/cli-agents";
 import { addMessage, getTaskContext } from "@/lib/conversation";
+import { recordExecution } from "@/lib/executions";
 import { getProviderConnections } from "@/lib/keys";
 import { estimateTokens } from "@/lib/llm-router";
 import { getProfile } from "@/lib/profile";
@@ -104,6 +105,27 @@ async function prepareRun(run: RunRow): Promise<PreparedRun | null> {
     },
     keys,
   );
+
+  // La planification est un appel modèle comme un autre : le taire creuserait un
+  // trou dans le suivi des tokens (HUD, /health) et dans le coût du projet —
+  // qu'il soit gratuit ne le rend pas invisible.
+  if (plan.usage) {
+    await recordExecution({
+      userId: run.userId,
+      taskLabel: `[plan] ${taskCtx.taskTitle}`,
+      projectId: taskCtx.projectId,
+      taskId: run.taskId,
+      provider: plan.usage.spec.provider,
+      model: plan.usage.spec.modelId,
+      tier: "fast",
+      status: "succeeded",
+      promptTokens: plan.usage.promptTokens,
+      completionTokens: plan.usage.completionTokens,
+      costUsd: plan.usage.costUsd,
+      startedAt: plan.usage.startedAt,
+      finishedAt: plan.usage.finishedAt,
+    });
+  }
 
   // Routage dynamique : seulement si l'utilisateur n'a pas choisi lui-même.
   let engine: "llm" | "cli" = forcedCli ? "cli" : "llm";

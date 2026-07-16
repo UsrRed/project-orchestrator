@@ -35,7 +35,7 @@ import {
   selectModelChain,
   type ProviderKeys,
 } from "@/lib/llm-router";
-import { findFreeModel, type ModelSpec } from "@/lib/models";
+import { computeCostUsd, findFreeModel, type ModelSpec } from "@/lib/models";
 import { logInfo } from "@/lib/observability";
 import {
   fullSourceOrder,
@@ -92,6 +92,22 @@ export interface PlanInput {
   cliEngine: boolean;
 }
 
+/**
+ * Consommation de l'appel de planification, à journaliser par l'appelant.
+ *
+ * Absent si le plan vient de l'heuristique (aucun appel). Remonté plutôt que
+ * journalisé ici : ce module ne connaît ni le projet ni la tâche, et les lui
+ * passer juste pour écrire une ligne le rendrait dépendant de la base.
+ */
+export interface PlannerUsage {
+  spec: ModelSpec;
+  promptTokens: number;
+  completionTokens: number;
+  costUsd: number;
+  startedAt: Date;
+  finishedAt: Date;
+}
+
 export interface RunPlan {
   level: IntelligenceLevel;
   maxIterations: number;
@@ -101,6 +117,9 @@ export interface RunPlan {
   planner: "ai" | "heuristic";
   /** Modèle ayant produit le plan (`planner === "ai"`). */
   plannerModel?: string;
+  /** Ce que l'évaluation a consommé. Un appel non journalisé est un trou dans
+   *  le suivi des tokens (HUD, /health) — même gratuit. */
+  usage?: PlannerUsage;
 }
 
 const BOUNDS = {
@@ -158,8 +177,9 @@ export async function planRun(
     .map(([lvl, hint]) => `  ${lvl} — ${hint}`)
     .join("\n");
 
+  const startedAt = new Date();
   try {
-    const { value: object, spec } = await runWithFallback(
+    const { value: object, usage, spec } = await runWithFallback(
       "fast",
       keys,
       async (model, _spec, signal) => {
@@ -199,8 +219,20 @@ export async function planRun(
       reason: object.reason,
       planner: "ai",
       plannerModel: `${spec.provider}/${spec.modelId}`,
+      usage: {
+        spec,
+        promptTokens: usage?.promptTokens ?? 0,
+        completionTokens: usage?.completionTokens ?? 0,
+        costUsd: computeCostUsd(
+          spec,
+          usage?.promptTokens ?? 0,
+          usage?.completionTokens ?? 0,
+        ),
+        startedAt,
+        finishedAt: new Date(),
+      },
     };
-    logInfo("run.planned", { ...plan, goal: input.goal.slice(0, 80) });
+    logInfo("run.planned", { ...plan, usage: undefined, goal: input.goal.slice(0, 80) });
     return plan;
   } catch (err) {
     logInfo("run.plan_fallback", {
