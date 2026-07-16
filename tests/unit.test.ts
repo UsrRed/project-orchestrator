@@ -10,6 +10,7 @@ import {
   cliAgentInfo,
   isCliAgentId,
 } from "@/lib/cli-agents";
+import { parseUsageText } from "@/lib/claude-usage";
 import { decrypt, encrypt, maskSecret } from "@/lib/crypto";
 import { buildEnv, runProcess } from "@/lib/process";
 import { workspacePathFor } from "@/lib/workspace";
@@ -468,6 +469,81 @@ const OPENCODE_NDJSON_TOKENS = [
     },
   }),
 ].join("\n");
+
+/**
+ * Texte réel de `claude -p "/usage"` (sonde du 2026-07-16), tronqué après les
+ * limites — la suite (« What's contributing… ») est du statistique local.
+ */
+const CLAUDE_USAGE_TEXT = `You are currently using your subscription to power your Claude Code usage
+
+Current session: 6% used · resets Jul 17, 12:50am (Europe/Paris)
+Current week (all models): 8% used · resets Jul 19, 11pm (Europe/Paris)
+Current week (Fable): 0% used · resets Jul 19, 11pm (Europe/Paris)
+
+What's contributing to your limits usage?
+Approximate, based on local sessions on this machine.
+
+Last 24h · 1371 requests · 10 sessions
+  88% of your usage was at >150k context
+  69% of your usage came from sessions active for 8+ hours`;
+
+describe("quota d'abonnement Claude", () => {
+  it("extrait les limites du texte réel de /usage", () => {
+    const limits = parseUsageText(CLAUDE_USAGE_TEXT);
+    expect(limits).toEqual([
+      {
+        key: "session",
+        label: "Current session",
+        percentUsed: 6,
+        resetsAt: "Jul 17, 12:50am (Europe/Paris)",
+      },
+      {
+        key: "week_all_models",
+        label: "Current week (all models)",
+        percentUsed: 8,
+        resetsAt: "Jul 19, 11pm (Europe/Paris)",
+      },
+      {
+        key: "week_fable",
+        label: "Current week (Fable)",
+        percentUsed: 0,
+        resetsAt: "Jul 19, 11pm (Europe/Paris)",
+      },
+    ]);
+  });
+
+  it("ignore les statistiques locales, qui ne sont pas le quota", () => {
+    // « 88% of your usage was at >150k context » ressemble à une limite mais
+    // n'en est pas une : sans « used », la ligne ne doit pas être retenue.
+    const keys = parseUsageText(CLAUDE_USAGE_TEXT).map((l) => l.key);
+    expect(keys).toHaveLength(3);
+    expect(keys.some((k) => k.includes("context"))).toBe(false);
+  });
+
+  it("les clés sont stables entre deux relevés : le delta est appariable", () => {
+    const before = parseUsageText(CLAUDE_USAGE_TEXT);
+    const after = parseUsageText(
+      CLAUDE_USAGE_TEXT.replace("Current session: 6%", "Current session: 11%"),
+    );
+    const b = before.find((l) => l.key === "session")!;
+    const a = after.find((l) => l.key === "session")!;
+    // Points de pourcentage, pas de variation relative : 6 → 11 consomme 5
+    // points de quota, pas « +83 % ».
+    expect(a.percentUsed - b.percentUsed).toBe(5);
+  });
+
+  it("dégrade sans jeter : format inconnu, texte vide, décimales", () => {
+    expect(parseUsageText("")).toEqual([]);
+    expect(parseUsageText("Bienvenue dans Claude Code")).toEqual([]);
+    // Un compte sur clé API n'affiche pas de quota d'abonnement.
+    expect(parseUsageText("You are using the Anthropic API")).toEqual([]);
+
+    const decimal = parseUsageText("Current session: 12.5% used");
+    expect(decimal[0]!.percentUsed).toBe(12.5);
+    // Sans « resets », la limite reste exploitable.
+    expect(decimal[0]!.resetsAt).toBeNull();
+  });
+});
 
 describe("registre des agents CLI", () => {
   it("expose claude, gemini et opencode", () => {

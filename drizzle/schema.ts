@@ -402,6 +402,34 @@ export const profiles = pgTable("profiles", {
  * peuvent être reprises après un crash. Garde-fous vérifiés à chaque itération :
  * plafond de coût, nombre max d'itérations, timeout, kill switch.
  */
+/**
+ * Relevés de l'usage d'abonnement Claude (`claude -p "/usage"`).
+ *
+ * **Pas de `user_id`, et ce n'est pas un oubli** : le quota appartient au login
+ * `claude` de la machine, pas à un compte de l'app. Il est partagé par tous les
+ * utilisateurs et inclut la consommation faite hors de l'app. Y coller un
+ * `user_id` laisserait croire à une ventilation par compte qui n'existe pas.
+ *
+ * Une ligne = un relevé. Les pourcentages viennent du serveur d'Anthropic ; on
+ * ne les recalcule pas, on les horodate pour pouvoir comparer avant/après.
+ */
+export const claudeUsageSamples = pgTable("claude_usage_samples", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  capturedAt: timestamp("captured_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  /**
+   * Limites relevées : `[{ key, label, percentUsed, resetsAt }]`.
+   *
+   * `jsonb` plutôt que des colonnes fixes : les limites exposées dépendent du
+   * plan (la ligne « Fable » n'existe pas partout) et bougeront avec le CLI.
+   * Une colonne par limite obligerait à migrer à chaque changement d'offre.
+   */
+  limits: jsonb("limits").notNull(),
+  /** Runs actifs à l'instant du relevé : distingue « pendant » de « au repos ». */
+  activeRuns: integer("active_runs").notNull().default(0),
+});
+
 export const autonomousRuns = pgTable("autonomous_runs", {
   id: uuid("id").primaryKey().defaultRandom(),
   userId: uuid("user_id")

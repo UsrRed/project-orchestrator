@@ -14,6 +14,11 @@ import {
   type ExecutionStats,
   type ModelUsageRow,
 } from "@/lib/executions";
+import {
+  earliestSampleSince,
+  sampleClaudeUsage,
+  type ClaudeLimit,
+} from "@/lib/claude-usage";
 import { listActiveRuns, type RunStatus } from "@/lib/runs";
 
 /** Fenêtre du delta « en ce moment ». */
@@ -46,6 +51,26 @@ export interface LiveSnapshot {
   recent: { tokens: number; costUsd: number; count: number; windowMs: number };
   /** Ventilation par (provider, modèle) : global, et sur la fenêtre live. */
   byModel: { global: ModelUsageRow[]; recent: ModelUsageRow[] };
+  /** Quota d'abonnement Claude de la machine (null si non relevable). */
+  claude: ClaudeQuota | null;
+}
+
+/** Une limite d'abonnement, avec son évolution depuis le début de la fenêtre. */
+export interface ClaudeQuotaLimit extends ClaudeLimit {
+  /**
+   * Points de pourcentage consommés depuis le relevé « avant ». null si aucun
+   * point de comparaison (première ouverture, limite apparue depuis).
+   */
+  deltaPoints: number | null;
+}
+
+export interface ClaudeQuota {
+  limits: ClaudeQuotaLimit[];
+  capturedAt: Date;
+  /** Instant du relevé « avant ». null si on n'a qu'un seul relevé. */
+  comparedTo: Date | null;
+  /** Des agents tournaient-ils au moment du relevé « avant » ? */
+  agentsActiveBefore: boolean;
 }
 
 export async function liveSnapshot(
@@ -60,6 +85,13 @@ export async function liveSnapshot(
     usageByModel(userId),
     usageByModel(userId, since),
   ]);
+
+  // Après `listActiveRuns` : le relevé horodate le nombre d'agents actifs, ce
+  // qui est ce qui distingue « pendant » de « au repos ».
+  const activeRuns = runs.filter(
+    (r) => r.status === "running" || r.status === "queued",
+  ).length;
+  const claude = await claudeQuota(activeRuns, since, now);
 
   return {
     running: runs.filter((r) => r.status === "running").length,
@@ -82,6 +114,45 @@ export async function liveSnapshot(
     executions: { total: stats.count },
     recent: { ...recent, windowMs: RECENT_WINDOW_MS },
     byModel: { global: byModelGlobal, recent: byModelRecent },
+    claude,
+  };
+}
+
+/**
+ * Relève le quota et le compare au plus ancien relevé de la fenêtre — le
+ * « avant » face au « maintenant ».
+ *
+ * Le delta est en **points de pourcentage**, pas en pourcentage relatif :
+ * passer de 6 % à 8 % consomme 2 points de quota, pas « +33 % ».
+ */
+async function claudeQuota(
+  activeRuns: number,
+  since: Date,
+  now: Date,
+): Promise<ClaudeQuota | null> {
+  const current = await sampleClaudeUsage(activeRuns, now);
+  if (!current) return null;
+
+  const before = await earliestSampleSince(since);
+  // Le plus ancien relevé de la fenêtre PEUT être le relevé courant : il n'y a
+  // alors rien à comparer, et afficher un delta de 0 laisserait croire à une
+  // consommation nulle plutôt qu'à une absence de mesure.
+  const comparable =
+    before && before.capturedAt.getTime() < current.capturedAt.getTime()
+      ? before
+      : null;
+
+  return {
+    capturedAt: current.capturedAt,
+    comparedTo: comparable?.capturedAt ?? null,
+    agentsActiveBefore: (comparable?.activeRuns ?? 0) > 0,
+    limits: current.limits.map((l) => {
+      const prev = comparable?.limits.find((p) => p.key === l.key);
+      return {
+        ...l,
+        deltaPoints: prev ? l.percentUsed - prev.percentUsed : null,
+      };
+    }),
   };
 }
 

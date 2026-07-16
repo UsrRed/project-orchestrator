@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { ModelUsageRow } from "@/lib/executions";
-import type { LiveAgent, LiveSnapshot } from "@/lib/live";
+import type { ClaudeQuota, LiveAgent, LiveSnapshot } from "@/lib/live";
 
 /**
  * Cadence de rafraîchissement. On sonde vite quand des agents tournent (la
@@ -173,6 +173,8 @@ function LivePanel({
 
       <ModelBreakdown snap={snap} />
 
+      {snap.claude && <ClaudeQuotaPanel quota={snap.claude} />}
+
       <Link
         href="/health"
         className="mt-3 inline-block text-xs text-emerald-400 transition hover:text-emerald-300"
@@ -251,6 +253,84 @@ function ModelBreakdown({ snap }: { snap: LiveSnapshot }) {
   );
 }
 
+/**
+ * Quota d'abonnement Claude : ce qu'il RESTE, et ce qui a été consommé depuis
+ * le premier relevé de la fenêtre (le « avant »).
+ *
+ * La mention « machine » n'est pas un détail de politesse : ce quota inclut la
+ * consommation faite hors de l'app, donc un delta non nul ne prouve pas qu'un
+ * run de l'app en est la cause.
+ */
+function ClaudeQuotaPanel({ quota }: { quota: ClaudeQuota }) {
+  return (
+    <section className="mt-3 flex flex-col gap-2 border-t border-neutral-800 pt-3">
+      <div className="flex items-baseline justify-between">
+        <h3 className="text-xs font-semibold text-neutral-300">
+          Abonnement Claude
+        </h3>
+        <span className="font-mono text-[10px] text-neutral-600">machine</span>
+      </div>
+
+      <ul className="flex flex-col gap-1.5">
+        {quota.limits.map((l) => (
+          <li key={l.key} className="flex flex-col gap-0.5">
+            <div className="flex items-baseline gap-2 text-[11px]">
+              <span className="min-w-0 flex-1 truncate text-neutral-400">
+                {l.label}
+              </span>
+              <span className="font-mono text-neutral-200">
+                {formatPercent(100 - l.percentUsed)} restant
+              </span>
+              {l.deltaPoints !== null && l.deltaPoints > 0 && (
+                <span className="font-mono text-amber-300">
+                  −{formatPercent(l.deltaPoints)}
+                </span>
+              )}
+            </div>
+            <div
+              className="h-1 overflow-hidden rounded-full bg-neutral-800"
+              role="progressbar"
+              aria-valuenow={Math.round(l.percentUsed)}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-label={`${l.label} : ${formatPercent(l.percentUsed)} utilisé`}
+            >
+              <div
+                className={`h-full rounded-full ${
+                  l.percentUsed >= 90
+                    ? "bg-red-400"
+                    : l.percentUsed >= 70
+                      ? "bg-amber-400"
+                      : "bg-emerald-400"
+                }`}
+                style={{ width: `${Math.min(100, l.percentUsed)}%` }}
+              />
+            </div>
+            {l.resetsAt && (
+              <span className="text-[10px] text-neutral-600">
+                remis à zéro {l.resetsAt}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+
+      <p className="text-[10px] leading-relaxed text-neutral-600">
+        {quota.comparedTo ? (
+          <>
+            Baisse mesurée depuis {formatClock(quota.comparedTo)}
+            {quota.agentsActiveBefore ? " (agents actifs)" : " (aucun agent)"}.{" "}
+          </>
+        ) : (
+          <>Premier relevé : rien à comparer pour l&apos;instant. </>
+        )}
+        Quota du login <code>claude</code> de la machine — il inclut ton usage
+        hors de l&apos;app.
+      </p>
+    </section>
+  );
+}
+
 function ModelRow({ row: r }: { row: ModelUsageRow }) {
   const kind = providerKind(r.provider);
   return (
@@ -319,6 +399,19 @@ function formatTokens(n: number): string {
   if (n < 1_000) return String(n);
   if (n < 1_000_000) return `${(n / 1_000).toFixed(1).replace(".", ",")} k`;
   return `${(n / 1_000_000).toFixed(1).replace(".", ",")} M`;
+}
+
+/** `8` → `8 %` ; `0,5` → `0,5 %`. Pas de décimale inutile. */
+function formatPercent(n: number): string {
+  const rounded = Math.round(n * 10) / 10;
+  return `${String(Number.isInteger(rounded) ? rounded : rounded.toFixed(1)).replace(".", ",")} %`;
+}
+
+function formatClock(d: Date | string): string {
+  return new Date(d).toLocaleTimeString("fr-FR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 function formatDuration(ms: number): string {
