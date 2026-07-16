@@ -9,6 +9,11 @@ import {
 import { currentUsage, resetRateLimits, tryAcquire } from "@/lib/rate-limit";
 import { parseWidget } from "@/lib/widgets";
 import { panelKeyFor } from "@/lib/phase-panel";
+import {
+  credentialHelp,
+  defaultMethod,
+  isMethodSupported,
+} from "@/lib/providers";
 
 describe("crypto", () => {
   it("round-trip encrypt/decrypt", () => {
@@ -147,6 +152,24 @@ describe("widgets : parsing sécurisé", () => {
   it("rejette un JSON invalide / enum hors schéma", () => {
     expect(parseWidget("{pas json")).toBeNull();
     expect(parseWidget({ type: "callout", level: "danger", title: "t", body: "b" })).toBeNull();
+  });
+});
+
+describe("connecteurs : registre & aide", () => {
+  it("méthodes par provider", () => {
+    expect(defaultMethod("ollama")).toBe("none");
+    expect(isMethodSupported("ollama", "none")).toBe(true);
+    expect(isMethodSupported("ollama", "api_key")).toBe(false);
+    expect(isMethodSupported("google", "oauth")).toBe(true);
+    expect(isMethodSupported("groq", "oauth")).toBe(false);
+  });
+
+  it("lien « obtenir la credential » selon la méthode", () => {
+    expect(credentialHelp("openai", "api_key")?.url).toContain("platform.openai.com");
+    expect(credentialHelp("anthropic", "api_key")?.url).toContain("console.anthropic.com");
+    const g = credentialHelp("google", "oauth");
+    expect(g?.command).toBe("gcloud auth print-access-token");
+    expect(credentialHelp("ollama", "none")).toBeNull();
   });
 });
 

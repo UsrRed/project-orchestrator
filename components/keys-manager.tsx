@@ -11,6 +11,7 @@ import type { ConnectionView } from "@/lib/keys";
 import {
   METHOD_LABEL,
   PROVIDERS,
+  credentialHelp,
   defaultMethod,
   providerInfo,
   type ConnMethod,
@@ -29,6 +30,7 @@ export function KeysManager({ connections }: { connections: ConnectionView[] }) 
 
   const methods = providerInfo(provider)?.methods ?? ["api_key"];
   const needsSecret = method !== "none";
+  const help = credentialHelp(provider, method);
 
   function onProviderChange(p: Provider) {
     setProvider(p);
@@ -103,6 +105,25 @@ export function KeysManager({ connections }: { connections: ConnectionView[] }) 
           </p>
         )}
 
+        {help && (
+          <div className="flex flex-col gap-2 rounded-lg border border-sky-900/50 bg-sky-950/10 px-3 py-2 text-xs text-sky-200/90">
+            {help.url ? (
+              <a
+                href={help.url}
+                target="_blank"
+                rel="noreferrer"
+                className="font-semibold text-sky-300 underline-offset-2 hover:underline"
+              >
+                {help.label} →
+              </a>
+            ) : (
+              <span className="font-semibold text-sky-300">{help.label}</span>
+            )}
+            {help.command && <CopyCommand command={help.command} />}
+            {help.note && <p className="text-sky-200/70">{help.note}</p>}
+          </div>
+        )}
+
         <button
           type="submit"
           disabled={pending}
@@ -114,9 +135,8 @@ export function KeysManager({ connections }: { connections: ConnectionView[] }) 
 
       {method === "oauth" && (
         <p className="rounded-lg border border-sky-900/50 bg-sky-950/10 px-3 py-2 text-xs text-sky-200/80">
-          Le jeton OAuth est envoyé en <code>Authorization: Bearer</code>. Fiable
-          pour les endpoints OpenAI-compatibles ; expérimental pour
-          Anthropic/Google (voie « sans clé » officielle : Vertex/Bedrock).
+          Le jeton est envoyé en <code>Authorization: Bearer</code>. Fiable pour
+          les endpoints OpenAI-compatibles.
         </p>
       )}
 
@@ -175,6 +195,28 @@ export function KeysManager({ connections }: { connections: ConnectionView[] }) 
           local) — le routeur préfère le local gratuit quand il est présent.
         </p>
       )}
+    </div>
+  );
+}
+
+function CopyCommand({ command }: { command: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="flex items-center gap-2">
+      <code className="flex-1 overflow-x-auto whitespace-nowrap rounded bg-neutral-950 px-2 py-1 font-mono text-neutral-300">
+        {command}
+      </code>
+      <button
+        type="button"
+        onClick={() => {
+          navigator.clipboard?.writeText(command);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        }}
+        className="shrink-0 rounded border border-neutral-700 px-2 py-1 text-[11px] text-neutral-300 transition hover:border-emerald-600 hover:text-emerald-400"
+      >
+        {copied ? "✓ copié" : "Copier"}
+      </button>
     </div>
   );
 }

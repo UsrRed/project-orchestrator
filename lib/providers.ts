@@ -13,12 +13,24 @@ import type { Provider } from "@/lib/models";
 
 export type ConnMethod = "api_key" | "oauth" | "none";
 
+/** Aide pour obtenir une credential : lien à ouvrir et/ou commande à copier. */
+export interface CredentialHelp {
+  label: string;
+  url?: string;
+  command?: string;
+  note?: string;
+}
+
 export interface ProviderInfo {
   id: Provider;
   label: string;
   /** Méthodes de connexion supportées (la première est la valeur par défaut). */
   methods: ConnMethod[];
   note?: string;
+  /** Page où créer une clé API. */
+  apiKeyUrl?: string;
+  /** Aide pour obtenir un jeton OAuth (Bearer). */
+  oauth?: CredentialHelp;
 }
 
 export const PROVIDERS: readonly ProviderInfo[] = [
@@ -26,13 +38,52 @@ export const PROVIDERS: readonly ProviderInfo[] = [
     id: "ollama",
     label: "Local (LM Studio / Ollama)",
     methods: ["none"],
-    note: "Serveur local OpenAI-compatible — aucune credential requise.",
+    note: "Serveur local OpenAI-compatible (LOCAL_AI_BASE_URL) — aucune credential requise.",
   },
-  { id: "anthropic", label: "Anthropic (Claude)", methods: ["api_key", "oauth"] },
-  { id: "openai", label: "OpenAI (GPT)", methods: ["api_key", "oauth"] },
-  { id: "google", label: "Google (Gemini)", methods: ["api_key", "oauth"] },
-  { id: "groq", label: "Groq (Llama)", methods: ["api_key"] },
-  { id: "openrouter", label: "OpenRouter", methods: ["api_key"] },
+  {
+    id: "anthropic",
+    label: "Anthropic (Claude)",
+    methods: ["api_key", "oauth"],
+    apiKeyUrl: "https://console.anthropic.com/settings/keys",
+    oauth: {
+      label: "OAuth Anthropic (expérimental)",
+      note: "Pas de flux OAuth public tiers pour l'API. Voie « sans clé » officielle : Amazon Bedrock / Google Vertex. Colle ici un jeton Bearer si tu en as un.",
+    },
+  },
+  {
+    id: "openai",
+    label: "OpenAI (GPT)",
+    methods: ["api_key", "oauth"],
+    apiKeyUrl: "https://platform.openai.com/api-keys",
+    oauth: {
+      label: "OAuth OpenAI (expérimental)",
+      note: "L'API OpenAI s'utilise normalement par clé. Colle un jeton Bearer si ta configuration en fournit un.",
+    },
+  },
+  {
+    id: "google",
+    label: "Google (Gemini)",
+    methods: ["api_key", "oauth"],
+    apiKeyUrl: "https://aistudio.google.com/apikey",
+    oauth: {
+      label: "Jeton d'accès Google",
+      command: "gcloud auth print-access-token",
+      url: "https://developers.google.com/oauthplayground",
+      note: "Jeton Bearer avec le scope generative-language ou cloud-platform (compte/projet GCP).",
+    },
+  },
+  {
+    id: "groq",
+    label: "Groq (Llama)",
+    methods: ["api_key"],
+    apiKeyUrl: "https://console.groq.com/keys",
+  },
+  {
+    id: "openrouter",
+    label: "OpenRouter",
+    methods: ["api_key"],
+    apiKeyUrl: "https://openrouter.ai/keys",
+  },
 ] as const;
 
 export const METHOD_LABEL: Record<ConnMethod, string> = {
@@ -52,4 +103,20 @@ export function isMethodSupported(id: Provider, method: ConnMethod): boolean {
 /** Méthode par défaut d'un provider (la première déclarée). */
 export function defaultMethod(id: Provider): ConnMethod {
   return providerInfo(id)?.methods[0] ?? "api_key";
+}
+
+/** Aide contextuelle « où obtenir la credential » selon provider + méthode. */
+export function credentialHelp(
+  id: Provider,
+  method: ConnMethod,
+): CredentialHelp | null {
+  const info = providerInfo(id);
+  if (!info) return null;
+  if (method === "api_key" && info.apiKeyUrl) {
+    return { label: "Obtenir une clé API", url: info.apiKeyUrl };
+  }
+  if (method === "oauth" && info.oauth) {
+    return info.oauth;
+  }
+  return null;
 }
