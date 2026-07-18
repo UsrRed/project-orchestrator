@@ -45,28 +45,9 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    /**
-     * Identité du « modèle local » figée pour les tests.
-     *
-     * Sans ça, elle dépend du poste : les niveaux (`LOCAL_AI_LEVEL`) décident du
-     * routage, et un `.env` de développeur ferait passer ici ce qui échoue en CI.
-     *
-     * `LOCAL_AI_BASE_URL` pointe volontairement vers un port mort : par défaut
-     * le provider `ollama` viserait `localhost:1234`, c'est-à-dire le vrai
-     * LM Studio de la machine — un test appellerait alors un modèle réel, lent,
-     * non déterministe, et absent de la CI. Le faux modèle
-     * ([fake-llm.ts](tests/fake-llm.ts)) réécrit cette variable vers son propre
-     * serveur ; tout appel qui lui échapperait échoue net au lieu de passer
-     * inaperçu.
-     */
-    env: {
-      LOCAL_AI_MODEL: "qwen-active",
-      LOCAL_AI_LEVEL: "3",
-      LOCAL_AI_CONTEXT: "32768",
-      LOCAL_AI_BASE_URL: "http://127.0.0.1:1/v1",
-    },
     // Les tests d'intégration partagent la même base (truncate) → pas de
-    // parallélisme entre fichiers.
+    // parallélisme entre fichiers. C'est aussi ce qui rend sûre la mutation
+    // globale du PATH par le faux `claude` ([tests/fake-claude.ts]).
     fileParallelism: false,
     testTimeout: 30_000,
     hookTimeout: 30_000,

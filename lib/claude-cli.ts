@@ -133,7 +133,10 @@ export async function claudeJson<T>(
   opts: ClaudeOpts = {},
 ): Promise<ClaudeCall & { value: T }> {
   const jsonSchema = JSON.stringify(
-    zodToJsonSchema(schema, { target: "jsonSchema7" }),
+    // `$refStrategy: "none"` : schéma entièrement inline (pas de `$ref` vers des
+    // définitions), plus lisible pour le modèle et sans résolution à faire côté
+    // lecteur.
+    zodToJsonSchema(schema, { target: "jsonSchema7", $refStrategy: "none" }),
   );
 
   const system =

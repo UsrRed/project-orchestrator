@@ -4,12 +4,6 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { db } from "@/lib/db";
 import { getCurrentUserId } from "@/lib/users";
 import {
-  addConnection,
-  deleteConnection,
-  getProviderConnections,
-  listConnections,
-} from "@/lib/keys";
-import {
   executionHealth,
   listFailedExecutions,
   projectSpendUsd,
@@ -38,7 +32,6 @@ import {
   applyPlan,
   claimNextRun,
   enqueueRun,
-  finishRun,
   getRunFresh,
   listRunsForTask,
   runHealth,
@@ -66,7 +59,7 @@ const OTHER = "00000000-0000-0000-0000-000000000000";
 
 async function reset() {
   await db.execute(
-    sql`TRUNCATE projects, normes, api_keys, agent_executions, autonomous_runs, oauth_config, profiles RESTART IDENTITY CASCADE`,
+    sql`TRUNCATE projects, normes, agent_executions, autonomous_runs, oauth_config, profiles RESTART IDENTITY CASCADE`,
   );
 }
 
@@ -94,40 +87,6 @@ let userId: string;
 beforeEach(async () => {
   userId = await getCurrentUserId();
   await reset();
-});
-
-describe("connecteurs (clé API / OAuth / local)", () => {
-  it("ajoute, masque, déchiffre, upsert, supprime", async () => {
-    await addConnection(userId, "anthropic", "api_key", "sk-ant-TESTKEY-abcdef123456", "perso");
-    await addConnection(userId, "groq", "api_key", "gsk_TESTKEY-zyxwvu987654", null);
-    const conns = await listConnections(userId);
-    expect(conns).toHaveLength(2);
-    expect(conns.every((c) => !c.masked.includes("TESTKEY"))).toBe(true);
-
-    const dec = await getProviderConnections(userId);
-    expect(dec.anthropic?.secret).toBe("sk-ant-TESTKEY-abcdef123456");
-    expect(dec.groq?.secret).toBe("gsk_TESTKEY-zyxwvu987654");
-
-    await addConnection(userId, "anthropic", "api_key", "sk-ant-NEW-000111", "perso");
-    expect((await listConnections(userId))).toHaveLength(2);
-    expect((await getProviderConnections(userId)).anthropic?.secret).toBe("sk-ant-NEW-000111");
-
-    await deleteConnection(userId, conns[0]!.id);
-    expect(await listConnections(userId)).toHaveLength(1);
-  });
-
-  it("supporte les méthodes oauth (jeton chiffré) et none (local sans secret)", async () => {
-    await addConnection(userId, "google", "oauth", "ya29.oauth-token-xyz", null);
-    await addConnection(userId, "ollama", "none", null, null);
-    const dec = await getProviderConnections(userId);
-    expect(dec.google).toEqual({ method: "oauth", secret: "ya29.oauth-token-xyz" });
-    expect(dec.ollama).toEqual({ method: "none" });
-
-    const views = await listConnections(userId);
-    const local = views.find((v) => v.provider === "ollama");
-    expect(local?.method).toBe("none");
-    expect(local?.masked).not.toContain("token");
-  });
 });
 
 describe("projets : arborescence & édition", () => {
@@ -221,8 +180,8 @@ describe("runs autonomes & garde-fous", () => {
     const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;
     await setBudget(userId, pid, 0.1);
     await recordExecution({
-      userId, taskLabel: "t", projectId: pid, provider: "ollama", model: "x",
-      tier: "fast", status: "succeeded", promptTokens: 0, completionTokens: 0,
+      userId, taskLabel: "t", projectId: pid, provider: "claude_cli", model: "claude",
+      tier: "cli", status: "succeeded", promptTokens: 0, completionTokens: 0,
       costUsd: 0.2, startedAt: new Date(), finishedAt: new Date(),
     });
     const rid = await enqueueRun(userId, taskId, { goal: "g", maxIterations: 5, maxCostUsd: 10 });
@@ -241,8 +200,6 @@ describe("runs autonomes & garde-fous", () => {
     const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
     const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;
 
-    // Le défaut : « ne rien dépenser ». Le run doit aller au bout, pas s'arrêter
-    // immédiatement sur `spent >= max`.
     await enqueueRun(userId, taskId, { goal: "g", maxIterations: 2, maxCostUsd: 0 });
     const claimed = await claimNextRun(new Date());
     expect(claimed?.maxCostUsd).toBe(0);
@@ -271,74 +228,38 @@ describe("runs autonomes & garde-fous", () => {
     expect(final.iterations).toBe(1);
   });
 
-  it("mise en file sans moteur ni limites : tout reste à planifier", async () => {
+  it("mise en file sans limites : tout reste à préparer", async () => {
     const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
     const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;
 
     const rid = await enqueueRun(userId, taskId, { goal: "g" });
     const [run] = await listRunsForTask(userId, taskId);
     expect(run?.id).toBe(rid);
-    expect(run?.engine).toBe("auto");
     expect(run?.maxIterations).toBeNull();
     expect(run?.timeoutMin).toBeNull();
     expect(run?.maxCostUsd).toBe(0);
-    expect(run?.plannedLevel).toBeNull();
+    expect(run?.sourceLabel).toBeNull();
 
-    // applyPlan fige le plan et arme le timeout à partir de MAINTENANT, pas de
-    // la mise en file.
+    // applyPlan fige les limites et arme le timeout à partir de MAINTENANT, pas
+    // de la mise en file.
     const now = new Date("2026-07-16T12:00:00Z");
     await applyPlan(
       rid,
       {
-        engine: "llm",
-        plannedLevel: 2,
-        planReason: "r",
-        planner: "ai",
-        sourceKind: "free",
-        sourceLabel: "Gratuit — opencode/big-pickle",
-        maxIterations: 4,
-        timeoutMin: 10,
+        planReason: "Limites par défaut de l'agent Claude Code.",
+        sourceLabel: "Claude Code (abonnement)",
+        maxIterations: 1,
+        timeoutMin: 30,
       },
       now,
     );
     const planned = await getRunFresh(rid);
-    expect(planned?.engine).toBe("llm");
-    expect(planned?.maxIterations).toBe(4);
-    expect(planned?.plannedLevel).toBe(2);
-    expect(planned?.sourceKind).toBe("free");
-    expect(planned?.timeoutAt?.getTime()).toBe(now.getTime() + 10 * 60_000);
+    expect(planned?.maxIterations).toBe(1);
+    expect(planned?.sourceLabel).toBe("Claude Code (abonnement)");
+    expect(planned?.timeoutAt?.getTime()).toBe(now.getTime() + 30 * 60_000);
   });
 
-  it("itérations épuisées : le livrable est sauvé au lieu d'être jeté", async () => {
-    const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
-    const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;
-    await enqueueRun(userId, taskId, { goal: "maquettes", maxIterations: 2, maxCostUsd: 0 });
-    const claimed = await claimNextRun(new Date());
-
-    // Un agent qui n'aboutit jamais mais qui produit : exactement le cas des
-    // maquettes d'échecs (5/5 itérations, zéro artefact sauvegardé).
-    const saved: { title: string; salvaged: boolean }[] = [];
-    const final = await processRun(claimed!, {
-      stepFn: async (ctx) => ({
-        done: false,
-        note: `étape ${ctx.iteration + 1}`,
-        costUsd: 0,
-        draft: { title: "Maquettes", content: `# v${ctx.iteration + 1}` },
-      }),
-      onArtifact: async (_run, artifact, opts) => {
-        saved.push({ title: artifact.title, salvaged: Boolean(opts?.salvaged) });
-      },
-    });
-
-    expect(final.stopReason).toBe("iterations");
-    expect(final.status).toBe("failed"); // le run n'a pas convergé : on le dit.
-    // …mais le travail est conservé, dans sa dernière version, et annoncé comme
-    // inachevé.
-    expect(saved).toEqual([{ title: "Maquettes", salvaged: true }]);
-    expect(final.draft?.content).toBe("# v2");
-  });
-
-  it("objectif atteint : l'artefact est produit une seule fois, non marqué inachevé", async () => {
+  it("objectif atteint : l'artefact est produit une seule fois", async () => {
     const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
     const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;
     await enqueueRun(userId, taskId, { goal: "g", maxIterations: 5, maxCostUsd: 0 });
@@ -350,7 +271,6 @@ describe("runs autonomes & garde-fous", () => {
         done: true,
         note: "fini",
         costUsd: 0,
-        draft: { title: "Doc", content: "# ok" },
         artifact: { title: "Doc", content: "# ok" },
       }),
       onArtifact: async (_run, _artifact, opts) => {
@@ -359,7 +279,6 @@ describe("runs autonomes & garde-fous", () => {
     });
 
     expect(final.stopReason).toBe("completed");
-    // Un seul artefact : le succès ne doit pas déclencher AUSSI le sauvetage.
     expect(saved).toEqual([{ salvaged: false }]);
   });
 
@@ -371,18 +290,16 @@ describe("runs autonomes & garde-fous", () => {
     const claimed = await claimNextRun(new Date());
     expect(claimed).not.toBeNull();
 
-    // Sans battement, une étape longue (agent CLI : plusieurs minutes) laisse le
-    // verrou pourrir, et un second worker relance le MÊME run en parallèle.
+    // Sans battement, une étape longue (l'agent Claude Code : plusieurs minutes)
+    // laisse le verrou pourrir, et un second worker relance le MÊME run.
     const stolen = await claimNextRun(new Date(Date.now() + 5 * 60_000));
     expect(stolen?.id).toBe(claimed!.id);
 
-    // Le battement repousse le verrou : le run reste hors de la fenêtre de
-    // reprise tant qu'il bat.
     await touchRun(claimed!.id);
     expect(await claimNextRun(new Date(Date.now() + 30_000))).toBeNull();
   });
 
-  it("un run non planifié ne boucle pas indéfiniment", async () => {
+  it("un run non préparé ne boucle pas indéfiniment", async () => {
     const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
     const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;
 
@@ -402,29 +319,13 @@ describe("runs autonomes & garde-fous", () => {
   });
 });
 
-describe("profil : ordre des sources", () => {
-  it("répare un ordre partiel ou corrompu et le persiste", async () => {
-    await upsertProfile(userId, { sourceOrder: ["subscription"] });
-    const p = await getProfile(userId);
-    // Complété dans l'ordre par défaut, sans jamais amputer la liste.
-    expect(p.sourceOrder).toEqual(["subscription", "local", "free"]);
-
-    await upsertProfile(userId, {});
-    expect((await getProfile(userId)).sourceOrder).toEqual([
-      "local",
-      "subscription",
-      "free",
-    ]);
-  });
-});
-
 describe("budgets & exécutions", () => {
   it("rattache le coût, seuils, blocage", async () => {
     const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
     const rec = (cost: number, status: "succeeded" | "failed" = "succeeded") =>
       recordExecution({
-        userId, taskLabel: "t", projectId: pid, provider: "ollama", model: "x",
-        tier: "fast", status, promptTokens: 0, completionTokens: 0,
+        userId, taskLabel: "t", projectId: pid, provider: "claude_cli", model: "claude",
+        tier: "cli", status, promptTokens: 0, completionTokens: 0,
         costUsd: cost, startedAt: new Date(), finishedAt: new Date(),
       });
 
