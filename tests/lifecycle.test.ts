@@ -32,6 +32,7 @@ import {
 } from "@/app/tasks/[taskId]/actions";
 import { db } from "@/lib/db";
 import { getCoworkStatus, listArtifacts, listMessages } from "@/lib/conversation";
+import { parseWidget } from "@/lib/widgets";
 import { listExecutions } from "@/lib/executions";
 import { getProjectTree, listProjects, type TaskView } from "@/lib/projects";
 import { listRunsForTask } from "@/lib/runs";
@@ -207,8 +208,18 @@ describe("cycle de vie d'un projet, de l'idée à la clôture", () => {
 
     // Le livrable existe (le résumé de l'agent + le diff du workspace).
     const artifacts = await listArtifacts(userId, taskId);
-    expect(artifacts).toHaveLength(1);
-    expect(artifacts[0]?.content).toBeTruthy();
+    const documents = artifacts.filter((a) => a.type === "document");
+    const widgets = artifacts.filter((a) => a.type === "widget");
+    expect(documents).toHaveLength(1);
+    expect(documents[0]?.content).toBeTruthy();
+
+    // « Play & watch » : le run met lui-même ses résultats en forme — le tableau
+    // de bord se remplit de widgets valides, taggés comme auto-générés.
+    expect(widgets.length).toBeGreaterThanOrEqual(1);
+    expect(widgets.every((w) => parseWidget(w.content) !== null)).toBe(true);
+    expect(
+      widgets.every((w) => (w.data as { auto?: boolean } | null)?.auto === true),
+    ).toBe(true);
 
     // Le journal raconte le run : plan + étape + artefact.
     const kinds = (await listMessages(userId, taskId)).map((m) => m.kind);

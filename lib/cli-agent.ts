@@ -23,11 +23,13 @@ import {
   addMessage,
   getTaskContext,
   listMessages,
+  replaceRunWidgets,
   runNotes,
 } from "@/lib/conversation";
 import { projectBudgetExceeded } from "@/lib/budgets";
 import { buildPhaseNormsContext } from "@/lib/normes";
-import { recordExecution } from "@/lib/executions";
+import { recordClaudeExecution, recordExecution } from "@/lib/executions";
+import { visualizeResults } from "@/lib/widgets";
 import { getRunFresh } from "@/lib/runs";
 import { runProcess } from "@/lib/process";
 import { captureException, logInfo } from "@/lib/observability";
@@ -337,6 +339,44 @@ export function makeCliAgentDeps(userId: string, cliId: CliAgentId): WorkerDeps 
         kind: "artifact",
         data: { artifactId: id },
       });
+
+      // Visualisation automatique : met le résultat du run en forme sous forme
+      // de widgets, pour que le tableau de bord se remplisse sans action de
+      // l'utilisateur (« play & watch »). Best-effort — un échec ici ne doit pas
+      // faire tomber le run, dont le livrable est déjà sauvegardé.
+      try {
+        const taskCtx = await getTaskContext(userId, run.taskId);
+        if (!taskCtx) return;
+        if (await projectBudgetExceeded(taskCtx.projectId)) return;
+
+        const startedAt = new Date();
+        const res = await visualizeResults(taskCtx, artifact.content);
+        await replaceRunWidgets(
+          run.taskId,
+          run.id,
+          res.widgets.map((w) => ({
+            title: w.title,
+            content: JSON.stringify(w),
+          })),
+        );
+        await recordClaudeExecution(
+          {
+            userId,
+            taskLabel: `[viz auto] ${taskCtx.taskTitle}`,
+            projectId: taskCtx.projectId,
+            taskId: run.taskId,
+            status: "succeeded",
+            startedAt,
+            finishedAt: new Date(),
+          },
+          res.usage,
+          res.costUsd,
+        );
+      } catch (err) {
+        await captureException(err, "cli_agent.auto_widget_failed", {
+          runId: run.id,
+        });
+      }
     },
   };
 }

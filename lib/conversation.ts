@@ -9,7 +9,7 @@
  */
 import "server-only";
 
-import { and, asc, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
 import type { TaskMode } from "@/lib/projects";
@@ -201,12 +201,19 @@ export interface ArtifactView {
   title: string | null;
   content: string | null;
   url: string | null;
+  data: unknown;
   createdAt: Date;
 }
 
 export async function addArtifact(
   taskId: string,
-  a: { type: ArtifactType; title: string; content: string; url?: string },
+  a: {
+    type: ArtifactType;
+    title: string;
+    content: string;
+    url?: string;
+    data?: unknown;
+  },
 ): Promise<string> {
   const [row] = await db
     .insert(artifacts)
@@ -216,10 +223,40 @@ export async function addArtifact(
       title: a.title,
       content: a.content,
       url: a.url ?? null,
+      data: a.data ?? null,
     })
     .returning({ id: artifacts.id });
   if (!row) throw new Error("Échec d'enregistrement de l'artefact.");
   return row.id;
+}
+
+/**
+ * Remplace les widgets auto-générés d'un run : supprime ceux déjà taggés
+ * `{ runId, auto:true }` puis réinsère les nouveaux. Évite l'empilement quand un
+ * run boucle sur plusieurs itérations (chacune régénère la vue du run).
+ */
+export async function replaceRunWidgets(
+  taskId: string,
+  runId: string,
+  widgets: { title: string; content: string }[],
+): Promise<void> {
+  await db
+    .delete(artifacts)
+    .where(
+      and(
+        eq(artifacts.taskId, taskId),
+        sql`${artifacts.data}->>'runId' = ${runId}`,
+        sql`${artifacts.data}->>'auto' = 'true'`,
+      ),
+    );
+  for (const w of widgets) {
+    await addArtifact(taskId, {
+      type: "widget",
+      title: w.title,
+      content: w.content,
+      data: { runId, auto: true },
+    });
+  }
 }
 
 export async function listArtifacts(
@@ -238,6 +275,7 @@ export async function listArtifacts(
     title: r.title,
     content: r.content,
     url: r.url,
+    data: r.data,
     createdAt: r.createdAt,
   }));
 }

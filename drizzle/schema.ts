@@ -275,6 +275,12 @@ export const artifacts = pgTable("artifacts", {
   /** Contenu inline (document/widget JSON) ou URL externe. */
   content: text("content"),
   url: text("url"),
+  /**
+   * Métadonnée structurée éventuelle. Pour les widgets auto-générés par un run
+   * autonome : `{ runId, auto: true }` — permet de les distinguer des widgets
+   * manuels et de remplacer le résumé d'un run plutôt que d'empiler.
+   */
+  data: jsonb("data"),
   ...timestamps,
 });
 
