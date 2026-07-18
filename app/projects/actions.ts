@@ -184,9 +184,9 @@ export async function generateProjectAction(
     );
     // Auto-association des normes dont la catégorie ↔ type de phase (M5).
     await autoAssociateProjectNorms(userId, projectId);
-    // Budget par défaut du profil, si défini.
-    if (profile.defaultBudgetUsd && profile.defaultBudgetUsd > 0) {
-      await setBudget(userId, projectId, profile.defaultBudgetUsd);
+    // Plafond de tokens par défaut du profil, si défini.
+    if (profile.defaultBudgetTokens && profile.defaultBudgetTokens > 0) {
+      await setBudget(userId, projectId, profile.defaultBudgetTokens);
     }
     await recordClaudeExecution(
       {
@@ -368,11 +368,11 @@ export async function deleteTaskAction(formData: FormData): Promise<void> {
 
 export async function setBudgetAction(formData: FormData): Promise<void> {
   const projectId = String(formData.get("projectId") ?? "");
-  const raw = String(formData.get("limitUsd") ?? "").trim();
+  const raw = String(formData.get("limitTokens") ?? "").trim();
   if (!projectId) return;
-  const limitUsd = raw === "" ? 0 : Number(raw);
+  const limitTokens = raw === "" ? 0 : Number(raw);
   const userId = await getCurrentUserId();
-  await setBudget(userId, projectId, Number.isFinite(limitUsd) ? limitUsd : 0);
+  await setBudget(userId, projectId, Number.isFinite(limitTokens) ? limitTokens : 0);
   revalidatePath(`/projects/${projectId}`);
 }
 

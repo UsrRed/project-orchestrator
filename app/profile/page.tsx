@@ -17,7 +17,7 @@ export default async function ProfilePage() {
         <h1 className="text-4xl font-bold tracking-tight">Profil</h1>
         <p className="text-sm text-neutral-400">
           Ces préférences personnalisent l&apos;IA (langue, ton), fixent le type
-          de projet et le budget par défaut, et orientent le choix du provider.
+          de projet et le plafond de tokens par défaut d&apos;un projet.
         </p>
       </header>
 

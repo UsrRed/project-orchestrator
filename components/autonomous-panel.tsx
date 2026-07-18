@@ -30,13 +30,20 @@ const STATUS_LABEL: Record<string, string> = {
 
 const STOP_LABEL: Record<string, string> = {
   completed: "objectif atteint",
-  budget: "plafond de coût atteint",
-  project_budget: "budget du projet dépassé",
+  tokens: "plafond de tokens atteint",
+  project_tokens: "budget du projet dépassé",
   iterations: "max d'itérations atteint",
   timeout: "timeout",
   killed: "arrêté (kill switch)",
   error: "erreur",
 };
+
+/** Compact : 1234 → 1,2 k ; 2500000 → 2,5 M. */
+function formatTokens(n: number): string {
+  if (n < 1_000) return String(n);
+  if (n < 1_000_000) return `${(n / 1_000).toFixed(1).replace(".", ",")} k`;
+  return `${(n / 1_000_000).toFixed(1).replace(".", ",")} M`;
+}
 
 const fieldClass =
   "rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500";
@@ -81,30 +88,8 @@ export function AutonomousPanel({
           <span className="text-xs text-neutral-500">
             Claude Code travaille dans le workspace du projet, sur l&apos;abonnement
             de la machine — il modifie réellement les fichiers (sans commiter ni
-            pousser : tu reliras le diff).
-          </span>
-        </label>
-
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium text-neutral-200">
-            Plafond de dépense
-          </span>
-          <div className="flex items-center gap-2">
-            <span className="text-neutral-500">$</span>
-            <input
-              name="maxCostUsd"
-              type="number"
-              min={0}
-              max={50}
-              step={0.01}
-              defaultValue={0}
-              className={`${fieldClass} w-28`}
-            />
-          </div>
-          <span className="text-xs text-neutral-500">
-            <strong className="text-emerald-400">0 = ne rien facturer</strong> :
-            l&apos;abonnement Claude reste gratuit au token ; ce plafond n&apos;arrête
-            le run que si un coût réel apparaissait malgré tout.
+            pousser : tu reliras le diff). Gratuit au token : rien à surveiller,
+            lance et regarde.
           </span>
         </label>
 
@@ -116,7 +101,7 @@ export function AutonomousPanel({
             checked={customLimits}
             onChange={setCustomLimits}
             label="Fixer les limites moi-même"
-            hint="Par défaut : une invocation de l'agent (qui boucle déjà en interne), 30 min max. Le plafond de dépense, lui, reste toujours le tien."
+            hint="Par défaut : une invocation de l'agent (qui boucle déjà en interne), 30 min max, aucun plafond de tokens."
           />
 
           {customLimits && (
@@ -143,8 +128,20 @@ export function AutonomousPanel({
                   className={fieldClass}
                 />
               </label>
+              <label className="col-span-2 flex flex-col gap-1 text-xs text-neutral-500">
+                Plafond de tokens (0 = illimité)
+                <input
+                  name="maxTokens"
+                  type="number"
+                  min={0}
+                  step={1000}
+                  placeholder="0"
+                  className={fieldClass}
+                />
+              </label>
               <p className="col-span-2 text-xs text-neutral-600">
-                Laisse un champ vide pour garder la valeur par défaut.
+                Laisse un champ vide pour garder la valeur par défaut. Le plafond
+                de tokens ne compte que la consommation de ce run.
               </p>
             </div>
           )}
@@ -264,9 +261,9 @@ function RunItem({ run: r, taskId }: { run: RunRow; taskId: string }) {
           {r.iterations}/{planned ? r.maxIterations : "?"} itérations
         </span>
         <span>
-          {r.maxCostUsd > 0
-            ? `$${r.spentUsd.toFixed(4)} / $${r.maxCostUsd.toFixed(2)}`
-            : `${r.spentUsd > 0 ? `$${r.spentUsd.toFixed(4)} — ` : ""}sans dépense`}
+          {r.maxTokens > 0
+            ? `${formatTokens(r.spentTokens)} / ${formatTokens(r.maxTokens)} tokens`
+            : `${formatTokens(r.spentTokens)} tokens`}
         </span>
         {r.timeoutMin !== null && <span>{r.timeoutMin} min max</span>}
         {r.stopReason && (

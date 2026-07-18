@@ -39,7 +39,7 @@ export default async function HealthPage() {
         </span>
         <h1 className="text-4xl font-bold tracking-tight">Santé</h1>
         <p className="text-sm text-neutral-400">
-          Taux d&apos;échec des exécutions, coût, et derniers incidents. Capture
+          Taux d&apos;échec des exécutions, tokens, et derniers incidents. Capture
           Sentry&nbsp;:{" "}
           <span className={sentryOn ? "text-emerald-400" : "text-neutral-500"}>
             {sentryOn ? "activée" : "désactivée (définir SENTRY_DSN)"}
@@ -66,9 +66,9 @@ export default async function HealthPage() {
           />
         </div>
         <p className="text-xs text-neutral-500">
-          Coût total réel journalisé&nbsp;:{" "}
+          Tokens totaux journalisés&nbsp;:{" "}
           <span className="font-mono text-neutral-300">
-            ${exec.totalCostUsd.toFixed(6)}
+            {exec.totalTokens.toLocaleString("fr-FR")}
           </span>
         </p>
       </section>
@@ -147,7 +147,7 @@ export default async function HealthPage() {
                   <span className="text-xs text-neutral-500">{r.stopReason}</span>
                 )}
                 <span className="text-xs text-neutral-600">
-                  {r.iterations} it · ${r.spentUsd.toFixed(4)}
+                  {r.iterations} it · {r.spentTokens.toLocaleString("fr-FR")} tk
                 </span>
               </li>
             ))}

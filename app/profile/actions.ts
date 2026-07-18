@@ -21,7 +21,7 @@ export async function saveProfileAction(
   const language = String(formData.get("language") ?? "fr") === "en" ? "en" : "fr";
   const tone = String(formData.get("tone") ?? "").trim();
   const rawType = String(formData.get("defaultProjectType") ?? "tech");
-  const rawBudget = String(formData.get("defaultBudgetUsd") ?? "").trim();
+  const rawBudget = String(formData.get("defaultBudgetTokens") ?? "").trim();
 
   try {
     const userId = await getCurrentUserId();
@@ -30,7 +30,7 @@ export async function saveProfileAction(
       language,
       tone: tone || undefined,
       defaultProjectType: (TYPES.has(rawType) ? rawType : "tech") as ProjectType,
-      defaultBudgetUsd: rawBudget === "" ? null : Number(rawBudget),
+      defaultBudgetTokens: rawBudget === "" ? null : Number(rawBudget),
     });
     revalidatePath("/profile");
     return { ok: true, message: "Profil enregistré." };

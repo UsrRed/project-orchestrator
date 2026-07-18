@@ -59,16 +59,22 @@ export function ProfileForm({ profile }: { profile: Profile }) {
       </label>
 
       <label className="flex flex-col gap-1 text-sm">
-        <span className="text-neutral-400">Budget par défaut / projet ($)</span>
+        <span className="text-neutral-400">
+          Plafond de tokens par défaut / projet
+        </span>
         <input
-          name="defaultBudgetUsd"
+          name="defaultBudgetTokens"
           type="number"
           min={0}
-          step={0.01}
-          defaultValue={profile.defaultBudgetUsd ?? ""}
-          placeholder="ex: 5.00 (vide = aucun)"
+          step={1000}
+          defaultValue={profile.defaultBudgetTokens ?? ""}
+          placeholder="ex: 500000 (vide = aucun)"
           className="rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-neutral-100 outline-none focus:border-emerald-500"
         />
+        <span className="text-xs text-neutral-500">
+          L&apos;app tourne sur l&apos;abonnement Claude : on compte en tokens,
+          pas en euros. Vide = pas de plafond.
+        </span>
       </label>
 
       <button

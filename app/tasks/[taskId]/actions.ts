@@ -401,9 +401,13 @@ export async function startRunAction(
     rawIterations === null ? null : clamp(rawIterations, 1, 20);
   const timeoutMin = rawTimeout === null ? null : clamp(rawTimeout, 1, 120);
 
-  // Le plafond est toujours lu : c'est le réglage principal. 0 (le défaut) =
-  // « ne rien facturer » ; l'abonnement Claude reste gratuit au token.
-  const maxCostUsd = clamp(optionalNumber(formData.get("maxCostUsd")) ?? 0, 0, 50);
+  // Plafond de tokens du run (réglage avancé). 0 (le défaut) = illimité :
+  // l'abonnement Claude est gratuit au token, il n'y a rien à « ne pas dépenser ».
+  const rawMaxTokens = customLimits
+    ? optionalNumber(formData.get("maxTokens"))
+    : null;
+  const maxTokens =
+    rawMaxTokens === null ? 0 : clamp(rawMaxTokens, 0, 100_000_000);
 
   if (!taskId) return { ok: false, message: "Décris l'objectif du run." };
   if (!goal) return { ok: false, message: "Décris l'objectif du run." };
@@ -432,7 +436,7 @@ export async function startRunAction(
   await enqueueRun(userId, taskId, {
     goal,
     maxIterations,
-    maxCostUsd,
+    maxTokens,
     timeoutMin,
   });
   revalidatePath(`/tasks/${taskId}`);

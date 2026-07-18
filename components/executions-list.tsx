@@ -1,6 +1,8 @@
 import type { ExecutionStats, ExecutionView } from "@/lib/executions";
 
-/** Historique + agrégats de coût (table de vérité `agent_executions`). */
+const fmt = (n: number) => n.toLocaleString("fr-FR");
+
+/** Historique + agrégats de tokens (table de vérité `agent_executions`). */
 export function ExecutionsList({
   executions,
   stats,
@@ -11,11 +13,14 @@ export function ExecutionsList({
   return (
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-3 gap-3">
-        <Stat label="Exécutions" value={String(stats.count)} />
-        <Stat label="Coût total" value={`$${stats.totalCostUsd.toFixed(6)}`} />
+        <Stat label="Exécutions" value={fmt(stats.count)} />
         <Stat
           label="Tokens"
-          value={`${stats.totalPromptTokens + stats.totalCompletionTokens}`}
+          value={fmt(stats.totalPromptTokens + stats.totalCompletionTokens)}
+        />
+        <Stat
+          label="Entrée / sortie"
+          value={`${fmt(stats.totalPromptTokens)} / ${fmt(stats.totalCompletionTokens)}`}
         />
       </div>
 
@@ -27,8 +32,7 @@ export function ExecutionsList({
                 <th className="py-2 pr-3 font-medium">Requête</th>
                 <th className="py-2 pr-3 font-medium">Modèle</th>
                 <th className="py-2 pr-3 font-medium">Tier</th>
-                <th className="py-2 pr-3 font-medium">Tokens</th>
-                <th className="py-2 pr-3 font-medium">Coût</th>
+                <th className="py-2 pr-3 font-medium">Tokens (E/S)</th>
                 <th className="py-2 font-medium">Statut</th>
               </tr>
             </thead>
@@ -44,9 +48,8 @@ export function ExecutionsList({
                   </td>
                   <td className="py-2 pr-3">{e.tier ?? "—"}</td>
                   <td className="py-2 pr-3">
-                    {e.promptTokens}/{e.completionTokens}
+                    {fmt(e.promptTokens)}/{fmt(e.completionTokens)}
                   </td>
-                  <td className="py-2 pr-3">${e.costUsd.toFixed(6)}</td>
                   <td className="py-2">
                     <span
                       className={
@@ -65,8 +68,8 @@ export function ExecutionsList({
         </div>
       ) : (
         <p className="text-sm text-neutral-500">
-          Aucune exécution encore. Lancez le routeur avec une clé enregistrée
-          pour voir apparaître le coût réel ici.
+          Aucune exécution encore. Lance un run ou une action IA pour voir
+          apparaître les tokens consommés ici.
         </p>
       )}
     </div>

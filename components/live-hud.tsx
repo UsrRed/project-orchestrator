@@ -193,10 +193,8 @@ function LivePanel({
 function ModelBreakdown({ snap }: { snap: LiveSnapshot }) {
   const [scope, setScope] = useState<"recent" | "global">("recent");
   const rows = snap.byModel[scope];
-  const totals =
-    scope === "recent"
-      ? { tokens: snap.recent.tokens, costUsd: snap.recent.costUsd }
-      : { tokens: snap.tokens.total, costUsd: snap.costUsd };
+  const totalTokens =
+    scope === "recent" ? snap.recent.tokens : snap.tokens.total;
 
   return (
     <section className="flex flex-col gap-2">
@@ -238,7 +236,7 @@ function ModelBreakdown({ snap }: { snap: LiveSnapshot }) {
           <div className="flex items-baseline justify-between border-t border-neutral-800 pt-1.5 text-[11px]">
             <span className="text-neutral-500">Total</span>
             <span className="font-mono text-neutral-200">
-              {formatTokens(totals.tokens)} · ${totals.costUsd.toFixed(4)}
+              {formatTokens(totalTokens)} tokens
             </span>
           </div>
         </>
@@ -353,9 +351,6 @@ function ModelRow({ row: r }: { row: ModelUsageRow }) {
       >
         {formatTokens(r.tokens)}
       </span>
-      <span className="w-14 shrink-0 text-right font-mono text-neutral-500">
-        ${r.costUsd.toFixed(4)}
-      </span>
     </li>
   );
 }
@@ -387,9 +382,9 @@ function AgentRow({ agent: a }: { agent: LiveAgent }) {
         <span className="font-mono text-[10px] text-neutral-500">
           {/* Limites absentes tant que l'IA n'a pas planifié le run. */}
           {a.iterations}/{a.maxIterations ?? "?"} it ·{" "}
-          {a.maxCostUsd > 0
-            ? `$${a.spentUsd.toFixed(4)}/$${a.maxCostUsd.toFixed(2)}`
-            : "gratuit"}
+          {a.maxTokens > 0
+            ? `${formatTokens(a.spentTokens)}/${formatTokens(a.maxTokens)} tk`
+            : `${formatTokens(a.spentTokens)} tk`}
         </span>
       </Link>
     </li>
