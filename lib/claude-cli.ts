@@ -52,9 +52,10 @@ export interface ClaudeOpts {
   /** Consigne système, passée via `--append-system-prompt`. */
   system?: string;
   /**
-   * Modèle imposé (`--model`). Omis par défaut : Claude Code choisit son modèle
-   * lui-même (« auto »). À ne renseigner que pour forcer un modèle rapide là où
-   * la latence gêne (chat manuel).
+   * Modèle imposé (`--model`, ex. alias `sonnet` / `haiku`). Omis par défaut :
+   * Claude Code choisit son modèle lui-même (« auto » = max de l'abonnement).
+   * Les rôles d'assistance le renseignent via `modelFor()` ([models.ts](models.ts))
+   * pour ne pas tourner en Fable 5 sur des générations légères.
    */
   model?: string;
   signal?: AbortSignal;

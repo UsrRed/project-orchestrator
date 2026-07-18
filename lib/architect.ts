@@ -13,6 +13,7 @@ import { z } from "zod";
 
 import { claudeJson } from "@/lib/claude-cli";
 import type { CliModelUsage } from "@/lib/cli-agents";
+import { modelFor } from "@/lib/models";
 
 export type ProjectType = "tech" | "marketing";
 
@@ -106,7 +107,7 @@ export async function generateArchitecture(
       "Génère une arborescence de phases et de tâches cohérente, ordonnée " +
       "et actionnable pour mener ce projet à bien.",
     architectureSchema,
-    { system },
+    { system, model: modelFor("architect") },
   );
 
   return {
@@ -153,7 +154,7 @@ export async function refineArchitecture(
       "qui tient compte de la contrainte tout en conservant ce qui reste " +
       "pertinent.",
     architectureSchema,
-    { system },
+    { system, model: modelFor("architect") },
   );
 
   return {

@@ -7,9 +7,10 @@
  * ventilée par modèle. La persistance (messages, artefacts, journalisation) est
  * faite par la couche action.
  *
- * Depuis le passage en « Claude uniquement », plus de routeur ni de tiers : le
- * CLI choisit son modèle lui-même. Le chat reste réactif ; on pourrait forcer un
- * modèle rapide via `claudeText(..., { model })` si la latence gênait.
+ * Depuis le passage en « Claude uniquement », plus de routeur multi-provider :
+ * chaque rôle impose simplement un modèle proportionné via `modelFor()`
+ * ([models.ts](models.ts)) — Sonnet ici (chat, options, artefact), Haiku pour
+ * les suggestions — plutôt que de laisser le CLI prendre « auto » (max) partout.
  */
 import "server-only";
 
@@ -17,6 +18,7 @@ import { z } from "zod";
 
 import { claudeJson, claudeText } from "@/lib/claude-cli";
 import type { CliModelUsage } from "@/lib/cli-agents";
+import { modelFor } from "@/lib/models";
 import type { CoworkOptionsData, TaskContext } from "@/lib/conversation";
 import { panelKeyFor } from "@/lib/phase-panel";
 import type { TaskMode } from "@/lib/projects";
@@ -73,6 +75,7 @@ export async function manualReply(
 ): Promise<ManualResult> {
   const call = await claudeText(historyToPrompt(history), {
     system: systemPrompt(ctx, normsText),
+    model: modelFor("chat"),
   });
   return { text: call.text, usage: call.usage, costUsd: call.costUsd };
 }
@@ -111,6 +114,7 @@ export async function proposeCoworkOptions(
       systemPrompt(ctx, normsText) +
       "\n\nMode COWORK : propose 3 options distinctes pour avancer, puis " +
       "attends le choix de l'utilisateur. Ne tranche pas à sa place.",
+    model: modelFor("cowork-options"),
   });
   return { data: call.value, usage: call.usage, costUsd: call.costUsd };
 }
@@ -144,6 +148,7 @@ export async function produceCoworkArtifact(
       systemPrompt(ctx, normsText) +
       "\n\nMode COWORK : l'utilisateur a choisi une option. Produis " +
       "l'artefact correspondant (document Markdown), concret et complet.",
+    model: modelFor("cowork-artifact"),
   });
   return {
     title: call.value.title,
@@ -230,6 +235,7 @@ export async function suggestPrompts(
       "\n\n" +
       MODE_GUIDANCE[mode] +
       " Ne réponds PAS à la tâche : génère UNIQUEMENT des suggestions de prompts.",
+    model: modelFor("suggestions"),
   });
   return {
     suggestions: call.value.suggestions,

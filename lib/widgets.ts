@@ -19,6 +19,7 @@ import { z } from "zod";
 import { claudeJson } from "@/lib/claude-cli";
 import type { CliModelUsage } from "@/lib/cli-agents";
 import type { TaskContext } from "@/lib/conversation";
+import { modelFor } from "@/lib/models";
 
 // --- Schéma fixe des widgets --------------------------------------------
 
@@ -204,6 +205,7 @@ export async function generateWidget(
     system:
       `Tu génères un widget d'aide à la décision pour la tâche « ${ctx.taskTitle} » ` +
       `(projet ${ctx.projectType}). ${WIDGET_HINT}`,
+    model: modelFor("widget"),
   });
 
   return { widget: call.value, usage: call.usage, costUsd: call.costUsd };
@@ -254,6 +256,7 @@ export async function visualizeResults(
     system:
       `Tu es un assistant de dataviz pour la tâche « ${ctx.taskTitle} » ` +
       `(projet ${ctx.projectType}). ${WIDGET_HINT}`,
+    model: modelFor("widget"),
   });
 
   return { widgets: call.value.widgets, usage: call.usage, costUsd: call.costUsd };
