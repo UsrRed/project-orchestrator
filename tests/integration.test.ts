@@ -6,7 +6,7 @@ import { getCurrentUserId } from "@/lib/users";
 import {
   executionHealth,
   listFailedExecutions,
-  projectSpendUsd,
+  projectSpendTokens,
   recordExecution,
 } from "@/lib/executions";
 import {
@@ -159,12 +159,12 @@ describe("runs autonomes & garde-fous", () => {
     const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
     const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;
 
-    const rid = await enqueueRun(userId, taskId, { goal: "g", maxIterations: 3, maxCostUsd: 10 });
+    const rid = await enqueueRun(userId, taskId, { goal: "g", maxIterations: 3, maxTokens: 0 });
     const claimed = await claimNextRun(new Date());
     expect(claimed?.id).toBe(rid);
 
     const final = await processRun(claimed!, {
-      stepFn: async () => ({ done: false, note: "n", costUsd: 0 }),
+      stepFn: async () => ({ done: false, note: "n", tokens: 0 }),
     });
     expect(final.status).toBe("failed");
     expect(final.stopReason).toBe("iterations");
@@ -178,53 +178,56 @@ describe("runs autonomes & garde-fous", () => {
   it("garde-fou budget projet stoppe le run", async () => {
     const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
     const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;
-    await setBudget(userId, pid, 0.1);
+    // Plafond de 100 tokens, déjà dépassé par une exécution de 180 tokens.
+    await setBudget(userId, pid, 100);
     await recordExecution({
       userId, taskLabel: "t", projectId: pid, provider: "claude_cli", model: "claude",
-      tier: "cli", status: "succeeded", promptTokens: 0, completionTokens: 0,
-      costUsd: 0.2, startedAt: new Date(), finishedAt: new Date(),
+      tier: "cli", status: "succeeded", promptTokens: 120, completionTokens: 60,
+      costUsd: 0, startedAt: new Date(), finishedAt: new Date(),
     });
-    const rid = await enqueueRun(userId, taskId, { goal: "g", maxIterations: 5, maxCostUsd: 10 });
+    const rid = await enqueueRun(userId, taskId, { goal: "g", maxIterations: 5, maxTokens: 0 });
     void rid;
     const claimed = await claimNextRun(new Date());
     let steps = 0;
     const final = await processRun(claimed!, {
-      stepFn: async () => { steps++; return { done: false, note: "n", costUsd: 0 }; },
+      stepFn: async () => { steps++; return { done: false, note: "n", tokens: 0 }; },
       budgetExceeded: async () => projectBudgetExceeded(pid),
     });
-    expect(final.stopReason).toBe("project_budget");
+    expect(final.stopReason).toBe("project_tokens");
     expect(steps).toBe(0);
   });
 
-  it("plafond 0 laisse tourner un run gratuit (0 ≠ plafond atteint)", async () => {
+  it("plafond 0 = illimité : le run tourne malgré la consommation de tokens", async () => {
     const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
     const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;
 
-    await enqueueRun(userId, taskId, { goal: "g", maxIterations: 2, maxCostUsd: 0 });
+    await enqueueRun(userId, taskId, { goal: "g", maxIterations: 2, maxTokens: 0 });
     const claimed = await claimNextRun(new Date());
-    expect(claimed?.maxCostUsd).toBe(0);
+    expect(claimed?.maxTokens).toBe(0);
 
     let steps = 0;
     const final = await processRun(claimed!, {
+      // Chaque étape consomme des tokens : avec un plafond à 0 (illimité), ça ne
+      // doit jamais arrêter le run — sinon tout run mourrait à la 1re étape.
       stepFn: async () => {
         steps++;
-        return { done: steps === 2, note: "n", costUsd: 0 };
+        return { done: steps === 2, note: "n", tokens: 500 };
       },
     });
     expect(steps).toBe(2);
     expect(final.stopReason).toBe("completed");
   });
 
-  it("plafond 0 : une dépense imprévue arrête le run", async () => {
+  it("plafond de tokens atteint arrête le run", async () => {
     const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
     const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;
 
-    await enqueueRun(userId, taskId, { goal: "g", maxIterations: 5, maxCostUsd: 0 });
+    await enqueueRun(userId, taskId, { goal: "g", maxIterations: 5, maxTokens: 100 });
     const claimed = await claimNextRun(new Date());
     const final = await processRun(claimed!, {
-      stepFn: async () => ({ done: false, note: "n", costUsd: 0.01 }),
+      stepFn: async () => ({ done: false, note: "n", tokens: 150 }),
     });
-    expect(final.stopReason).toBe("budget");
+    expect(final.stopReason).toBe("tokens");
     expect(final.iterations).toBe(1);
   });
 
@@ -237,7 +240,7 @@ describe("runs autonomes & garde-fous", () => {
     expect(run?.id).toBe(rid);
     expect(run?.maxIterations).toBeNull();
     expect(run?.timeoutMin).toBeNull();
-    expect(run?.maxCostUsd).toBe(0);
+    expect(run?.maxTokens).toBe(0);
     expect(run?.sourceLabel).toBeNull();
 
     // applyPlan fige les limites et arme le timeout à partir de MAINTENANT, pas
@@ -262,7 +265,7 @@ describe("runs autonomes & garde-fous", () => {
   it("objectif atteint : l'artefact est produit une seule fois", async () => {
     const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
     const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;
-    await enqueueRun(userId, taskId, { goal: "g", maxIterations: 5, maxCostUsd: 0 });
+    await enqueueRun(userId, taskId, { goal: "g", maxIterations: 5, maxTokens: 0 });
     const claimed = await claimNextRun(new Date());
 
     const saved: { salvaged: boolean }[] = [];
@@ -270,7 +273,7 @@ describe("runs autonomes & garde-fous", () => {
       stepFn: async () => ({
         done: true,
         note: "fini",
-        costUsd: 0,
+        tokens: 0,
         artifact: { title: "Doc", content: "# ok" },
       }),
       onArtifact: async (_run, _artifact, opts) => {
@@ -285,7 +288,7 @@ describe("runs autonomes & garde-fous", () => {
   it("le battement de verrou empêche un second worker de reprendre un run vivant", async () => {
     const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
     const taskId = (await getProjectTree(userId, pid))!.phases[1]!.tasks[0]!.id;
-    await enqueueRun(userId, taskId, { goal: "long", maxIterations: 5, maxCostUsd: 0 });
+    await enqueueRun(userId, taskId, { goal: "long", maxIterations: 5, maxTokens: 0 });
 
     const claimed = await claimNextRun(new Date());
     expect(claimed).not.toBeNull();
@@ -309,7 +312,7 @@ describe("runs autonomes & garde-fous", () => {
     const final = await processRun(claimed!, {
       stepFn: async () => {
         steps++;
-        return { done: false, note: "n", costUsd: 0 };
+        return { done: false, note: "n", tokens: 0 };
       },
     });
     // Sans limites, la boucle n'a aucune borne : elle doit refuser de démarrer.
@@ -320,26 +323,27 @@ describe("runs autonomes & garde-fous", () => {
 });
 
 describe("budgets & exécutions", () => {
-  it("rattache le coût, seuils, blocage", async () => {
+  it("rattache les tokens, seuils, blocage", async () => {
     const pid = await createProjectFromArchitecture(userId, "idée", "tech", ARCH);
-    const rec = (cost: number, status: "succeeded" | "failed" = "succeeded") =>
+    // Budget en tokens : `rec(n)` journalise n tokens (entrée) sur le projet.
+    const rec = (tokens: number, status: "succeeded" | "failed" = "succeeded") =>
       recordExecution({
         userId, taskLabel: "t", projectId: pid, provider: "claude_cli", model: "claude",
-        tier: "cli", status, promptTokens: 0, completionTokens: 0,
-        costUsd: cost, startedAt: new Date(), finishedAt: new Date(),
+        tier: "cli", status, promptTokens: tokens, completionTokens: 0,
+        costUsd: 0, startedAt: new Date(), finishedAt: new Date(),
       });
 
-    await rec(0.05);
-    expect(await projectSpendUsd(pid)).toBeCloseTo(0.05, 9);
+    await rec(50);
+    expect(await projectSpendTokens(pid)).toBe(50);
 
-    await setBudget(userId, pid, 0.1);
-    await rec(0.04); // 0.09 → 90%
+    await setBudget(userId, pid, 100);
+    await rec(40); // 90 → 90%
     let s = await getBudgetStatus(userId, pid);
     expect(s.alert).toBe(true);
     expect(s.exceeded).toBe(false);
     await expect(assertWithinBudget(pid)).resolves.toBeUndefined();
 
-    await rec(0.03); // 0.12 → dépassé
+    await rec(30); // 120 → dépassé
     s = await getBudgetStatus(userId, pid);
     expect(s.exceeded).toBe(true);
     await expect(assertWithinBudget(pid)).rejects.toThrow();
@@ -356,20 +360,20 @@ describe("profil utilisateur", () => {
     const def = await getProfile(userId);
     expect(def.language).toBe("fr");
     expect(def.defaultProjectType).toBe("tech");
-    expect(def.defaultBudgetUsd).toBeNull();
+    expect(def.defaultBudgetTokens).toBeNull();
 
     await upsertProfile(userId, {
       displayName: "Alice",
       language: "en",
       tone: "direct",
       defaultProjectType: "marketing",
-      defaultBudgetUsd: 12.5,
+      defaultBudgetTokens: 500_000,
     });
     const p = await getProfile(userId);
     expect(p.displayName).toBe("Alice");
     expect(p.language).toBe("en");
     expect(p.defaultProjectType).toBe("marketing");
-    expect(p.defaultBudgetUsd).toBe(12.5);
+    expect(p.defaultBudgetTokens).toBe(500_000);
     expect(profilePreamble(p)).toContain("anglais");
     expect(profilePreamble(p)).toContain("direct");
   });

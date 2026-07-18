@@ -187,7 +187,7 @@ describe("cycle de vie d'un projet, de l'idée à la clôture", () => {
     // L'humain ne donne QUE l'objectif : ni itérations, ni timeout. Plafond 0.
     const started = await startRunAction(
       INITIAL,
-      form({ taskId, goal: "Rédiger le plan de lancement.", maxCostUsd: "0" }),
+      form({ taskId, goal: "Rédiger le plan de lancement." }),
     );
     expect(started.ok).toBe(true);
 
@@ -235,7 +235,7 @@ describe("cycle de vie d'un projet, de l'idée à la clôture", () => {
     await setModeAction(form({ taskId, mode: "autonomous" }));
     await startRunAction(
       INITIAL,
-      form({ taskId, goal: "Rédiger le plan.", maxCostUsd: "0" }),
+      form({ taskId, goal: "Rédiger le plan." }),
     );
     await processNextQueuedRun();
 
@@ -304,7 +304,7 @@ describe("cycle de vie d'un projet, de l'idée à la clôture", () => {
     await setModeAction(form({ taskId: auto.id, mode: "autonomous" }));
     await startRunAction(
       INITIAL,
-      form({ taskId: auto.id, goal: "Produire le livrable.", maxCostUsd: "0" }),
+      form({ taskId: auto.id, goal: "Produire le livrable." }),
     );
     expect(await processNextQueuedRun()).toBe(true);
     // File vide ensuite : aucun run fantôme.
