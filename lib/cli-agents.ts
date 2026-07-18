@@ -257,6 +257,23 @@ function parseGeminiUsage(j: Record<string, unknown>): CliModelUsage[] {
 /** Modèle non identifiable dans la sortie du CLI. Affiché tel quel. */
 export const UNKNOWN_MODEL = "(modèle inconnu)";
 
+/**
+ * Parse la sortie `--output-format json` de `claude`. Extraite du registre pour
+ * être réutilisée par les appels synchrones (génération/chat/widgets) via
+ * [claude-cli.ts](claude-cli.ts) : ces appels ne passent pas par le moteur `cli`
+ * mais lisent le même format. Ne jette jamais.
+ */
+export function parseClaudeStdout(stdout: string): CliOutcome {
+  const j = parseJsonLoose(stdout) as Record<string, unknown> | null;
+  if (!j) return rawFallback(stdout);
+  return {
+    text: asString(j.result) || NO_FINAL_TEXT,
+    costUsd: asNumber(j.total_cost_usd),
+    usage: parseClaudeUsage(j),
+    sessionId: asString(j.session_id) || undefined,
+  };
+}
+
 /** Sortie comprise, mais l'agent n'a pas conclu par un message. */
 const NO_FINAL_TEXT =
   "_(l'agent n'a pas renvoyé de message final — voir les changements du workspace ci-dessous)_";
@@ -294,16 +311,7 @@ export const CLI_AGENTS: readonly CliAgentInfo[] = [
         : // --session-id impose un UUID : celui du run → reprise déterministe.
           ["--session-id", runId]),
     ],
-    parseOutcome: (stdout) => {
-      const j = parseJsonLoose(stdout) as Record<string, unknown> | null;
-      if (!j) return rawFallback(stdout);
-      return {
-        text: asString(j.result) || NO_FINAL_TEXT,
-        costUsd: asNumber(j.total_cost_usd),
-        usage: parseClaudeUsage(j),
-        sessionId: asString(j.session_id) || undefined,
-      };
-    },
+    parseOutcome: parseClaudeStdout,
   },
   {
     id: "gemini",
