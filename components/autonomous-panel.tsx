@@ -7,6 +7,7 @@ import {
   startRunAction,
   type RunFormState,
 } from "@/app/tasks/[taskId]/actions";
+import { PromptSuggestions } from "@/components/prompt-suggestions";
 import type { RunRow } from "@/lib/runs";
 
 const INITIAL: RunFormState = { ok: false, message: "" };
@@ -53,8 +54,14 @@ export function AutonomousPanel({
   // limites (une invocation, 30 min max).
   const [customLimits, setCustomLimits] = useState(false);
 
+  // Objectif contrôlé : une suggestion de prompt le remplit au clic.
+  const [goal, setGoal] = useState("");
+
   return (
     <div className="flex flex-col gap-5">
+      {/* Hors du <form> : PromptSuggestions a son propre formulaire (imbrication
+          interdite en HTML). Un clic remplit l'objectif contrôlé ci-dessous. */}
+      <PromptSuggestions taskId={taskId} onPick={setGoal} />
       <form action={formAction} className="flex flex-col gap-4">
         <input type="hidden" name="taskId" value={taskId} />
 
@@ -66,6 +73,8 @@ export function AutonomousPanel({
             name="goal"
             rows={3}
             required
+            value={goal}
+            onChange={(e) => setGoal(e.target.value)}
             placeholder="Ex : implémenter cette tâche directement dans le dépôt, avec un résumé des changements."
             className={fieldClass}
           />

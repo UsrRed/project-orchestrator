@@ -6,14 +6,17 @@ import {
   manualReply,
   produceCoworkArtifact,
   proposeCoworkOptions,
+  suggestPrompts,
   type ClaudeMeta,
   type HistoryMessage,
+  type PromptSuggestion,
 } from "@/lib/agent";
 import {
   addArtifact,
   addMessage,
   getCoworkStatus,
   getTaskContext,
+  listArtifacts,
   listMessages,
   setTaskMode,
 } from "@/lib/conversation";
@@ -22,7 +25,7 @@ import { recordClaudeExecution } from "@/lib/executions";
 import { assertWithinBudget } from "@/lib/budgets";
 import { buildPhaseNormsContext } from "@/lib/normes";
 import { enqueueRun, requestKill } from "@/lib/runs";
-import { generateWidget } from "@/lib/widgets";
+import { generateWidget, visualizeResults } from "@/lib/widgets";
 import { getCurrentUserId } from "@/lib/users";
 import type { TaskMode } from "@/lib/projects";
 
@@ -195,6 +198,156 @@ export async function generateWidgetAction(
 
   revalidatePath(`/tasks/${taskId}`);
   return { ok: true, message: "Widget généré et sauvegardé." };
+}
+
+// --- Suggestions de prompts (à la demande, éphémères) --------------------
+
+export interface SuggestState {
+  ok: boolean;
+  message: string;
+  suggestions: PromptSuggestion[];
+}
+
+/**
+ * Génère des suggestions de prompts adaptées au mode + à l'étape. Éphémère :
+ * renvoyées dans le state (rendues en puces cliquables), jamais persistées — ce
+ * ne sont pas des messages. Pas de `revalidatePath` : rien n'a changé en base.
+ */
+export async function suggestPromptsAction(
+  _prev: SuggestState,
+  formData: FormData,
+): Promise<SuggestState> {
+  const taskId = String(formData.get("taskId") ?? "");
+  if (!taskId) return { ok: false, message: "Tâche manquante.", suggestions: [] };
+
+  const userId = await getCurrentUserId();
+  const ctx = await getTaskContext(userId, taskId);
+  if (!ctx) return { ok: false, message: "Tâche introuvable.", suggestions: [] };
+
+  try {
+    await assertWithinBudget(ctx.projectId);
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : "Budget dépassé.",
+      suggestions: [],
+    };
+  }
+
+  const history = await buildHistory(userId, taskId);
+  const norms = await buildPhaseNormsContext(userId, ctx.phaseId);
+  const startedAt = new Date();
+  try {
+    const res = await suggestPrompts(
+      ctx,
+      ctx.taskMode as TaskMode,
+      history,
+      norms.text,
+    );
+    await record(
+      userId,
+      `[suggestions] ${ctx.taskTitle}`,
+      res,
+      "succeeded",
+      startedAt,
+      { projectId: ctx.projectId, taskId },
+    );
+    return { ok: true, message: "", suggestions: res.suggestions };
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : "Échec des suggestions.",
+      suggestions: [],
+    };
+  }
+}
+
+// --- Visualisation des résultats (à la demande) --------------------------
+
+export interface VisualizeState {
+  ok: boolean;
+  message: string;
+}
+
+/** Rassemble le contenu récent (artefacts documents + réponses de l'agent). */
+async function buildVisualizeSource(
+  userId: string,
+  taskId: string,
+): Promise<string> {
+  const [msgs, arts] = await Promise.all([
+    listMessages(userId, taskId),
+    listArtifacts(userId, taskId),
+  ]);
+  const artPart = arts
+    .filter((a) => a.type !== "widget")
+    .slice(0, 3)
+    .map((a) => `${a.title ?? "Artefact"}\n${a.content}`)
+    .join("\n\n");
+  const msgPart = msgs
+    .filter((m) => m.role === "assistant" && m.kind !== "cowork_options")
+    .slice(-8)
+    .map((m) => m.content)
+    .join("\n\n");
+  return [artPart, msgPart].filter(Boolean).join("\n\n");
+}
+
+/**
+ * Met en forme les résultats déjà produits en 1 à 3 widgets, ajoutés aux
+ * artefacts. C'est la « partie visualisation », déclenchée à la main en
+ * Manuel/Cowork (en Autonome, le worker le fait tout seul).
+ */
+export async function visualizeResultsAction(
+  _prev: VisualizeState,
+  formData: FormData,
+): Promise<VisualizeState> {
+  const taskId = String(formData.get("taskId") ?? "");
+  if (!taskId) return { ok: false, message: "Tâche manquante." };
+
+  const userId = await getCurrentUserId();
+  const ctx = await getTaskContext(userId, taskId);
+  if (!ctx) return { ok: false, message: "Tâche introuvable." };
+
+  try {
+    await assertWithinBudget(ctx.projectId);
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : "Budget dépassé." };
+  }
+
+  const sourceText = await buildVisualizeSource(userId, taskId);
+  if (!sourceText.trim()) {
+    return { ok: false, message: "Rien à visualiser pour l'instant." };
+  }
+
+  const norms = await buildPhaseNormsContext(userId, ctx.phaseId);
+  const startedAt = new Date();
+  let added = 0;
+  try {
+    const res = await visualizeResults(ctx, sourceText, norms.text);
+    for (const w of res.widgets) {
+      await addArtifact(taskId, {
+        type: "widget",
+        title: w.title,
+        content: JSON.stringify(w),
+      });
+      added++;
+    }
+    await record(
+      userId,
+      `[visualisation] ${ctx.taskTitle}`,
+      { usage: res.usage, costUsd: res.costUsd },
+      "succeeded",
+      startedAt,
+      { projectId: ctx.projectId, taskId },
+    );
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message : "Échec de la visualisation.",
+    };
+  }
+
+  revalidatePath(`/tasks/${taskId}`);
+  return { ok: true, message: `${added} widget(s) ajouté(s) au tableau de bord.` };
 }
 
 // --- Mode Autonome : lancement / arrêt d'un run --------------------------

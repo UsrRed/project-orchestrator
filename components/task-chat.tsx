@@ -1,12 +1,13 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useState } from "react";
 
 import {
   chooseOptionAction,
   sendMessageAction,
   type ChatState,
 } from "@/app/tasks/[taskId]/actions";
+import { PromptSuggestions } from "@/components/prompt-suggestions";
 import type { CoworkOptionsData } from "@/lib/conversation";
 
 const INITIAL: ChatState = { ok: false, message: "" };
@@ -51,6 +52,13 @@ export function TaskChat({
   const [sendState, sendAction, sending] = useActionState(SEND, INITIAL);
   const [chooseState, chooseAction, choosing] = useActionState(CHOOSE, INITIAL);
 
+  // Composeur contrôlé : les suggestions de prompts le remplissent au clic, et
+  // on le vide après un envoi réussi.
+  const [message, setMessage] = useState("");
+  useEffect(() => {
+    if (sendState.ok) setMessage("");
+  }, [sendState]);
+
   // Point d'arrêt Cowork : l'agent attend un choix.
   if (awaitingChoice && pendingOptions) {
     return (
@@ -94,16 +102,22 @@ export function TaskChat({
       : "Écris ton message à l'agent…";
 
   return (
-    <form action={sendAction} className="flex flex-col gap-2">
-      <input type="hidden" name="taskId" value={taskId} />
-      <textarea
-        name="message"
-        rows={3}
-        required
-        placeholder={placeholder}
-        className="rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-neutral-100 outline-none focus:border-emerald-500"
-      />
-      <div className="flex items-center gap-3">
+    <div className="flex flex-col gap-3">
+      {/* Hors du <form> : PromptSuggestions a son propre formulaire, et des
+          formulaires imbriqués sont invalides en HTML (erreur d'hydratation). */}
+      <PromptSuggestions taskId={taskId} onPick={setMessage} />
+      <form action={sendAction} className="flex flex-col gap-2">
+        <input type="hidden" name="taskId" value={taskId} />
+        <textarea
+          name="message"
+          rows={3}
+          required
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          placeholder={placeholder}
+          className="rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-neutral-100 outline-none focus:border-emerald-500"
+        />
+        <div className="flex items-center gap-3">
         <button
           type="submit"
           disabled={sending}
@@ -117,10 +131,11 @@ export function TaskChat({
               ? "Demander des options"
               : "Envoyer"}
         </button>
-        {sendState.message && !sendState.ok && (
-          <p className="text-sm text-red-300">{sendState.message}</p>
-        )}
-      </div>
-    </form>
+          {sendState.message && !sendState.ok && (
+            <p className="text-sm text-red-300">{sendState.message}</p>
+          )}
+        </div>
+      </form>
+    </div>
   );
 }

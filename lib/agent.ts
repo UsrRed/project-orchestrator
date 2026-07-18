@@ -18,6 +18,8 @@ import { z } from "zod";
 import { claudeJson, claudeText } from "@/lib/claude-cli";
 import type { CliModelUsage } from "@/lib/cli-agents";
 import type { CoworkOptionsData, TaskContext } from "@/lib/conversation";
+import { panelKeyFor } from "@/lib/phase-panel";
+import type { TaskMode } from "@/lib/projects";
 
 // --- Contexte système ----------------------------------------------------
 
@@ -146,6 +148,91 @@ export async function produceCoworkArtifact(
   return {
     title: call.value.title,
     content: call.value.content,
+    usage: call.usage,
+    costUsd: call.costUsd,
+  };
+}
+
+// --- Suggestions de prompts (à la demande, éphémères) --------------------
+
+const promptSuggestionsSchema = z.object({
+  suggestions: z
+    .array(
+      z.object({
+        label: z.string().describe("Texte court de la puce (≈ 3–6 mots)."),
+        prompt: z.string().describe("Le prompt complet, prêt à être envoyé."),
+      }),
+    )
+    .min(3)
+    .max(6)
+    .describe("Suggestions de prompts distinctes, adaptées au mode et à l'étape."),
+});
+
+export interface PromptSuggestion {
+  label: string;
+  prompt: string;
+}
+
+export interface SuggestionsResult extends ClaudeMeta {
+  suggestions: PromptSuggestion[];
+}
+
+/** Ce que l'utilisateur *fait* dans chaque mode, pour orienter les suggestions. */
+const MODE_GUIDANCE: Record<TaskMode, string> = {
+  manual:
+    "Mode MANUEL (simple conversation) : propose des amorces de discussion ou " +
+    "des questions utiles à poser à l'agent pour avancer sur la tâche.",
+  cowork:
+    "Mode COWORK : propose des besoins/sujets sur lesquels l'utilisateur " +
+    "demanderait des options à l'agent (l'agent proposera puis produira un artefact).",
+  autonomous:
+    "Mode AUTONOME : propose des OBJECTIFS de run concrets, réalisables seul par " +
+    "l'agent directement dans le dépôt du projet.",
+};
+
+/** Repère méthodologique par type d'étape (aligné sur `panelKeyFor`). */
+const STAGE_SEED: Record<string, string> = {
+  recherche:
+    "recherche & cadrage (hypothèses, entretiens, analyse concurrentielle, personas, TAM/SAM/SOM)",
+  design: "design (parcours utilisateur, wireframes, système visuel, accessibilité)",
+  developpement: "développement (découpage technique, implémentation, tests, revue de code)",
+  marketing: "marketing (positionnement, cibles, canaux, contenu, KPIs de campagne)",
+  lancement: "lancement (checklist de mise en ligne, communication, suivi post-lancement)",
+  default: "les livrables attendus de cette phase",
+};
+
+/**
+ * Génère à la demande des suggestions de prompts adaptées au mode courant ET au
+ * type d'étape. Éphémère : la couche action renvoie ça dans son state, sans
+ * persister — ce ne sont pas des messages, juste des amorces cliquables.
+ */
+export async function suggestPrompts(
+  ctx: TaskContext,
+  mode: TaskMode,
+  history: HistoryMessage[],
+  normsText?: string,
+): Promise<SuggestionsResult> {
+  const stage = STAGE_SEED[panelKeyFor(ctx.phaseType)] ?? STAGE_SEED.default;
+  const recent = history.slice(-6);
+  const prompt = [
+    recent.length ? `Conversation en cours :\n${historyToPrompt(recent)}\n` : "",
+    `Propose 3 à 6 prompts que l'utilisateur pourrait envoyer maintenant, ` +
+      `adaptés à l'étape : ${stage}.`,
+    "Chaque suggestion : un `label` court pour la puce, et un `prompt` complet " +
+      "prêt à envoyer.",
+  ]
+    .filter((s) => s !== "")
+    .join("\n");
+
+  const call = await claudeJson(prompt, promptSuggestionsSchema, {
+    system:
+      systemPrompt(ctx, normsText) +
+      "\n\n" +
+      MODE_GUIDANCE[mode] +
+      " Ne réponds PAS à la tâche : génère UNIQUEMENT des suggestions de prompts.",
+  });
+  return {
+    suggestions: call.value.suggestions,
     usage: call.usage,
     costUsd: call.costUsd,
   };
