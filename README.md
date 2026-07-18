@@ -52,6 +52,7 @@ components/
   widget-generator.tsx  Formulaire client de génération de widget (M6)
 scripts/
   worker.ts           Worker de fond : draine la queue autonomous_runs
+  mcp-server.ts       Serveur MCP (stdio) : pilotage 100% autonome par un agent externe
 drizzle/
   schema.ts           Schéma complet (User, ApiKey, Project, Phase, Task,
                       AgentExecution, Message, Artifact, Norme, Budget…)
@@ -156,6 +157,7 @@ Auth.js v5 + **GitHub OAuth** (adapter Drizzle) : config Edge-safe ([auth.config
 | `npm run lint` | ESLint (config Next) |
 | `npm test` | Suite de tests (vitest : unitaires + intégration DB) |
 | `npm run worker` | Worker du mode Autonome (draine la queue en arrière-plan) |
+| `npm run mcp` | Serveur MCP (stdio) : pilotage 100% autonome par un agent externe |
 | `npm run db:generate` | Génère les migrations SQL depuis le schéma |
 | `npm run db:migrate` | Applique les migrations (non-interactif) |
 | `npm run db:studio` | Explorateur de base Drizzle |
@@ -180,6 +182,45 @@ La queue est **maison** (Postgres + worker), sans service externe :
 2. Le run est mis en file (`autonomous_runs`, statut `queued`).
 3. Le **worker** (`npm run worker`, processus séparé) réclame le run (`FOR UPDATE SKIP LOCKED`), l'exécute par itérations, vérifie les garde-fous **à chaque étape**, persiste coût et progression, produit un `Artifact`, puis notifie la fin (statut + raison d'arrêt).
 4. Un **kill switch** dans l'UI arrête un run en cours ; un worker qui crashe laisse le run repris automatiquement (verrou périmé).
+
+## Serveur MCP — piloter l'orchestrateur à 100% en autonome
+
+L'orchestrateur s'expose comme **serveur MCP** ([scripts/mcp-server.ts](scripts/mcp-server.ts),
+transport stdio) : un agent externe (Claude Code, Claude Desktop, un cron
+autonome…) gère **tout le cycle d'un projet** sans passer par l'UI web — créer
+l'arborescence, l'éditer, discuter les tâches (Manuel / Cowork), **lancer des
+runs autonomes**, suivre leur état et lire les livrables.
+
+```bash
+npm run mcp        # démarre le serveur (tsx --conditions=react-server, comme le worker)
+```
+
+Deux traits le rendent autosuffisant :
+
+- il parle à la **même base** que le web (mêmes fonctions `lib/`) — ce qu'un
+  agent crée par MCP apparaît dans l'UI, et inversement ;
+- il **héberge lui-même la boucle worker** : un run mis en file par
+  `launch_autonomous_run` s'exécute même sans serveur web. Le claim est atomique
+  (`FOR UPDATE SKIP LOCKED`), donc ce worker et le worker web/dédié coexistent
+  sans double traitement. Poser `MCP_INLINE_WORKER=0` pour déléguer l'exécution
+  au web / `npm run worker`.
+
+Le dépôt fournit un [`.mcp.json`](.mcp.json) : un Claude Code lancé à la racine
+découvre le serveur automatiquement. Outils exposés (26) :
+
+| Domaine | Outils |
+| --- | --- |
+| Projets | `list_projects`, `create_project`, `get_project`, `refine_project`, `rename_project`, `delete_project`, `set_project_budget` |
+| Arbre | `add_phase`, `update_phase`, `delete_phase`, `add_task`, `update_task`, `delete_task` |
+| Tâches (Manuel/Cowork) | `send_task_message`, `choose_cowork_option`, `list_task_messages`, `list_task_artifacts`, `generate_widget` |
+| Runs autonomes | `launch_autonomous_run`, `get_run`, `list_task_runs`, `kill_run` |
+| Normes | `list_normes`, `create_norme`, `delete_norme`, `associate_norme` |
+
+Boucle type d'un agent 100% autonome : `create_project` (idée → arborescence) →
+`get_project` (lire les ids) → `update_task` (passer les tâches en `autonomous`)
+→ `launch_autonomous_run` par tâche → `get_run` en polling → `list_task_artifacts`
+pour récupérer les livrables. L'utilisateur (repli local hors requête) et les
+garde-fous de budget/itérations/timeout s'appliquent exactement comme via l'UI.
 
 ## Niveau d'intelligence & routage
 

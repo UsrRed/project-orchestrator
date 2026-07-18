@@ -362,16 +362,19 @@ export async function addPhase(
   userId: string,
   projectId: string,
   name: string,
-): Promise<void> {
+): Promise<string> {
   if (!name.trim()) throw new Error("Nom de phase vide.");
   await assertOwnedProject(userId, projectId);
   const [row] = await db
     .select({ max: sql<number>`coalesce(max(${phases.order}), -1)::int` })
     .from(phases)
     .where(eq(phases.projectId, projectId));
-  await db
+  const [inserted] = await db
     .insert(phases)
-    .values({ projectId, name: name.trim(), order: (row?.max ?? -1) + 1 });
+    .values({ projectId, name: name.trim(), order: (row?.max ?? -1) + 1 })
+    .returning({ id: phases.id });
+  if (!inserted) throw new Error("Échec de création de la phase.");
+  return inserted.id;
 }
 
 export async function deletePhase(
@@ -416,10 +419,15 @@ export async function addTask(
   userId: string,
   phaseId: string,
   title: string,
-): Promise<void> {
+): Promise<string> {
   if (!title.trim()) throw new Error("Titre de tâche vide.");
   await projectIdOfPhase(userId, phaseId);
-  await db.insert(tasks).values({ phaseId, title: title.trim() });
+  const [inserted] = await db
+    .insert(tasks)
+    .values({ phaseId, title: title.trim() })
+    .returning({ id: tasks.id });
+  if (!inserted) throw new Error("Échec de création de la tâche.");
+  return inserted.id;
 }
 
 export async function deleteTask(

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "orchestrato": {
+      "command": "npx",
+      "args": ["tsx", "--conditions=react-server", "scripts/mcp-server.ts"],
+      "env": {}
+    }
+  }
+}
