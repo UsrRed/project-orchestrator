@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -111,6 +111,70 @@ describe("widgets : parsing sécurisé", () => {
   it("rejette un JSON invalide / enum hors schéma", () => {
     expect(parseWidget("{pas json")).toBeNull();
     expect(parseWidget({ type: "callout", level: "danger", title: "t", body: "b" })).toBeNull();
+  });
+
+  it("accepte les nouveaux types de données (bar_chart, progress, timeline, distribution, metric)", () => {
+    expect(
+      parseWidget({ type: "bar_chart", title: "t", bars: [{ label: "a", value: 3 }] })?.type,
+    ).toBe("bar_chart");
+    expect(
+      parseWidget({ type: "progress", title: "t", items: [{ label: "a", value: 40 }] })?.type,
+    ).toBe("progress");
+    expect(
+      parseWidget({
+        type: "timeline",
+        title: "t",
+        steps: [{ label: "a", status: "done" }],
+      })?.type,
+    ).toBe("timeline");
+    expect(
+      parseWidget({
+        type: "distribution",
+        title: "t",
+        segments: [{ label: "a", value: 1 }, { label: "b", value: 2 }],
+      })?.type,
+    ).toBe("distribution");
+    expect(parseWidget({ type: "metric", title: "t", value: "42" })?.type).toBe("metric");
+  });
+
+  it("bar_chart : rejette une valeur non numérique (le schéma reste strict)", () => {
+    expect(
+      parseWidget({ type: "bar_chart", title: "t", bars: [{ label: "a", value: "3" }] }),
+    ).toBeNull();
+  });
+
+  it("timeline : rejette un statut hors énum", () => {
+    expect(
+      parseWidget({ type: "timeline", title: "t", steps: [{ label: "a", status: "wip" }] }),
+    ).toBeNull();
+  });
+});
+
+describe("widget sandboxed_html : rendu isolé (iframe verrouillé)", () => {
+  it("accepte un html sous la limite, rejette au-delà", () => {
+    expect(parseWidget({ type: "sandboxed_html", title: "t", html: "<b>ok</b>" })?.type).toBe(
+      "sandboxed_html",
+    );
+    expect(
+      parseWidget({ type: "sandboxed_html", title: "t", html: "x".repeat(20_001) }),
+    ).toBeNull();
+  });
+
+  it("le renderer verrouille l'iframe : sandbox=\"\", srcDoc, jamais allow-same-origin", async () => {
+    // Invariant de sécurité vérifié à la source : le HTML « libre » du modèle ne
+    // peut être rendu QUE dans un iframe totalement sandboxé. Ce test échoue si
+    // quelqu'un ajoute `allow-same-origin`/`allow-scripts` ou passe par
+    // dangerouslySetInnerHTML.
+    const src = await readFile(
+      join(process.cwd(), "components/widget-renderer.tsx"),
+      "utf8",
+    );
+    expect(src).toContain('sandbox=""');
+    expect(src).toContain("srcDoc={widget.html}");
+    // Aucun attribut `sandbox` ne doit accorder de flag `allow-*` (ce qui lèverait
+    // le bac à sable). Cible l'attribut lui-même, pas les commentaires.
+    expect(src).not.toMatch(/sandbox="[^"]*allow/);
+    expect(src).not.toMatch(/dangerouslySetInnerHTML\s*=/);
   });
 });
 
