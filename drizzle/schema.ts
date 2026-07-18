@@ -325,10 +325,13 @@ export const budgets = pgTable("budgets", {
     .notNull()
     .unique()
     .references(() => projects.id, { onDelete: "cascade" }),
-  limitUsd: numeric("limit_usd", { precision: 12, scale: 4 }).notNull(),
-  spentUsd: numeric("spent_usd", { precision: 12, scale: 6 })
-    .notNull()
-    .default("0"),
+  /**
+   * Plafond en **tokens** (entrée + sortie cumulés) sur le projet. On ne compte
+   * plus en dollars : l'app tourne sur l'abonnement Claude, gratuit au token —
+   * la seule unité qui a un sens est le token, mesuré par run/appel (source :
+   * `agent_executions`), donc non biaisé par l'usage fait hors de l'app.
+   */
+  limitTokens: integer("limit_tokens").notNull(),
   period: text("period").notNull().default("total"),
   ...timestamps,
 });
@@ -348,7 +351,8 @@ export const profiles = pgTable("profiles", {
   defaultProjectType: projectTypeEnum("default_project_type")
     .notNull()
     .default("tech"),
-  defaultBudgetUsd: numeric("default_budget_usd", { precision: 12, scale: 4 }),
+  /** Plafond de tokens appliqué par défaut aux nouveaux projets (null = aucun). */
+  defaultBudgetTokens: integer("default_budget_tokens"),
   ...timestamps,
 });
 
@@ -356,7 +360,7 @@ export const profiles = pgTable("profiles", {
  * Runs du mode Autonome — sert AUSSI de queue durable : les lignes `queued`
  * sont réclamées par le worker (`FOR UPDATE SKIP LOCKED`), les `running`
  * peuvent être reprises après un crash. Garde-fous vérifiés à chaque itération :
- * plafond de coût, nombre max d'itérations, timeout, kill switch.
+ * plafond de tokens, nombre max d'itérations, timeout, kill switch.
  */
 /**
  * Relevés de l'usage d'abonnement Claude (`claude -p "/usage"`).
@@ -409,24 +413,22 @@ export const autonomousRuns = pgTable("autonomous_runs", {
    */
   maxIterations: integer("max_iterations"),
   /**
-   * Plafond de dépense. **0 est une valeur légitime** et le défaut : « ne rien
-   * facturer ». À ne pas confondre avec un plafond atteint — cf. `guardStop`.
+   * Plafond de **tokens** du run (entrée + sortie cumulés). **0 = illimité** et
+   * c'est le défaut : un run consomme forcément des tokens, donc « 0 » ne peut
+   * pas vouloir dire « n'en consomme aucun » — il veut dire « pas de plafond ».
+   * cf. `guardStop`.
    */
-  maxCostUsd: numeric("max_cost_usd", { precision: 12, scale: 6 })
-    .notNull()
-    .default("0"),
+  maxTokens: integer("max_tokens").notNull().default(0),
   /** Minutes demandées. NULL = défaut. `timeoutAt` en découle au démarrage. */
   timeoutMin: integer("timeout_min"),
   timeoutAt: timestamp("timeout_at", { withTimezone: true }),
   killRequested: boolean("kill_requested").notNull().default(false),
   /** Progression. */
   iterations: integer("iterations").notNull().default(0),
-  spentUsd: numeric("spent_usd", { precision: 12, scale: 6 })
-    .notNull()
-    .default("0"),
+  spentTokens: integer("spent_tokens").notNull().default(0),
   /** Verrou de worker (claim) : horodatage de prise en charge. */
   lockedAt: timestamp("locked_at", { withTimezone: true }),
-  /** Raison d'arrêt : completed | budget | iterations | timeout | killed | error. */
+  /** Raison d'arrêt : completed | tokens | project_tokens | iterations | timeout | killed | error. */
   stopReason: text("stop_reason"),
   error: text("error"),
   startedAt: timestamp("started_at", { withTimezone: true }),
