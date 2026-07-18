@@ -7,15 +7,17 @@
  * périmé (worker mort) sont repris. La progression (coût, itérations) est
  * persistée à CHAQUE étape → garde-fous vérifiables en continu, reprise après
  * crash.
+ *
+ * Depuis le passage en « Claude uniquement », il n'y a plus qu'un moteur : l'agent
+ * Claude Code, qui travaille dans le workspace du projet sur l'abonnement de la
+ * machine. Plus de choix de moteur ni de routage par source — d'où la disparition
+ * des colonnes `engine`/`boost`/`source_kind`/`draft`…
  */
 import "server-only";
 
 import { and, asc, desc, eq, lt, or, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { isCliAgentId, type CliAgentId } from "@/lib/cli-agents";
-import type { IntelligenceLevel } from "@/lib/intelligence";
-import type { SourceKind } from "@/lib/sources";
 import { autonomousRuns } from "@/drizzle/schema";
 
 export type RunStatus =
@@ -25,59 +27,18 @@ export type RunStatus =
   | "failed"
   | "cancelled";
 
-/**
- * Moteur d'exécution d'un run.
- *
- * `auto` est le défaut et n'est pas un moteur : c'est l'absence de choix, que le
- * worker résout en `llm` ou `cli` à la planification, d'après le niveau estimé
- * de la tâche et l'ordre de sources du profil. Il ne subsiste jamais sur un run
- * démarré.
- */
-export type RunEngine = "auto" | "llm" | "cli";
-
-/** Moteur réellement exécutable (ce que `auto` devient une fois résolu). */
-export type ResolvedRunEngine = Exclude<RunEngine, "auto">;
-
-/** Le livrable d'un run `llm`, dans l'état où la dernière itération l'a laissé. */
-export interface RunDraft {
-  title: string;
-  content: string;
-}
-
-/** Lecture défensive du jsonb : une colonne libre peut contenir n'importe quoi. */
-function mapDraft(v: unknown): RunDraft | null {
-  if (!v || typeof v !== "object") return null;
-  const d = v as Record<string, unknown>;
-  return typeof d.title === "string" && typeof d.content === "string"
-    ? { title: d.title, content: d.content }
-    : null;
-}
-
 export interface RunRow {
   id: string;
   userId: string;
   taskId: string;
   goal: string;
   status: RunStatus;
-  engine: RunEngine;
-  /** Renseigné si et seulement si `engine === "cli"`. */
-  engineCli: CliAgentId | null;
-  /** Router vers le plus capable plutôt que le moins cher (moteur `llm`). */
-  boost: boolean;
-  /** Niveau requis estimé (0-4). Null tant que le run n'est pas planifié. */
-  plannedLevel: IntelligenceLevel | null;
   planReason: string | null;
-  planner: "ai" | "heuristic" | null;
-  sourceKind: SourceKind | null;
+  /** Étiquette de la source d'exécution — « Claude Code (abonnement) ». */
   sourceLabel: string | null;
-  /**
-   * Livrable en cours (moteur `llm`). C'est l'état de travail que chaque
-   * itération relit et réécrit — et ce qu'on sauve si un garde-fou coupe.
-   */
-  draft: RunDraft | null;
-  /** Null = à estimer par l'IA ; une valeur = imposée par l'utilisateur. */
+  /** Null = à estimer par le worker ; une valeur = imposée par l'utilisateur. */
   maxIterations: number | null;
-  /** 0 = gratuit/abonnement uniquement (défaut), pas « plafond atteint ». */
+  /** 0 = ne rien facturer (défaut), pas « plafond atteint ». */
   maxCostUsd: number;
   timeoutMin: number | null;
   timeoutAt: Date | null;
@@ -92,10 +53,6 @@ export interface RunRow {
   createdAt: Date;
 }
 
-function mapEngine(v: string): RunEngine {
-  return v === "cli" || v === "auto" ? v : "llm";
-}
-
 function mapRow(r: typeof autonomousRuns.$inferSelect): RunRow {
   return {
     id: r.id,
@@ -103,18 +60,8 @@ function mapRow(r: typeof autonomousRuns.$inferSelect): RunRow {
     taskId: r.taskId,
     goal: r.goal,
     status: r.status as RunStatus,
-    engine: mapEngine(r.engine),
-    engineCli:
-      r.engineCli && isCliAgentId(r.engineCli) ? r.engineCli : null,
-    boost: r.boost,
-    plannedLevel:
-      r.plannedLevel === null ? null : (r.plannedLevel as IntelligenceLevel),
     planReason: r.planReason,
-    planner:
-      r.planner === "ai" || r.planner === "heuristic" ? r.planner : null,
-    sourceKind: (r.sourceKind as SourceKind) ?? null,
     sourceLabel: r.sourceLabel,
-    draft: mapDraft(r.draft),
     maxIterations: r.maxIterations,
     maxCostUsd: Number(r.maxCostUsd),
     timeoutMin: r.timeoutMin,
@@ -133,15 +80,11 @@ function mapRow(r: typeof autonomousRuns.$inferSelect): RunRow {
 
 export interface EnqueueInput {
   goal: string;
-  /** Défaut `auto` : le worker choisira la source d'après le niveau estimé. */
-  engine?: RunEngine;
-  engineCli?: string;
-  boost?: boolean;
-  /** `undefined`/`null` → estimé par l'IA à la planification. */
+  /** `undefined`/`null` → limite par défaut de l'agent CLI (1). */
   maxIterations?: number | null;
-  /** Défaut 0 : gratuit/abonnement uniquement. */
+  /** Défaut 0 : ne rien facturer. */
   maxCostUsd?: number;
-  /** `undefined`/`null` → estimé par l'IA. `timeoutAt` en découle au démarrage. */
+  /** `undefined`/`null` → défaut. `timeoutAt` en découle au démarrage. */
   timeoutMin?: number | null;
 }
 
@@ -149,10 +92,9 @@ export interface EnqueueInput {
  * Place un run en file (statut `queued`). L'appartenance de la tâche doit être
  * vérifiée par l'appelant (action).
  *
- * Ne décide plus ni du moteur ni des limites : un run part avec ce que
- * l'utilisateur a **explicitement** imposé, le reste reste `null` et sera
- * planifié par le worker ([run-planner.ts](run-planner.ts)). C'est ce qui rend
- * la mise en file instantanée — aucun appel LLM ne bloque le formulaire.
+ * Ne pose que ce que l'utilisateur a **explicitement** imposé ; le reste reste
+ * `null` et sera comblé par le worker ([worker-runtime.ts](worker-runtime.ts)) au
+ * démarrage. C'est ce qui rend la mise en file instantanée.
  */
 export async function enqueueRun(
   userId: string,
@@ -162,25 +104,12 @@ export async function enqueueRun(
   const goal = input.goal.trim();
   if (!goal) throw new Error("Objectif du run vide.");
 
-  const engine: RunEngine = input.engine ?? "auto";
-  // Un run `cli` sans CLI valide n'est pas exécutable : on refuse ici plutôt
-  // que de laisser le worker échouer après coup.
-  if (engine === "cli" && !(input.engineCli && isCliAgentId(input.engineCli))) {
-    throw new Error(
-      `Moteur CLI invalide : « ${input.engineCli ?? "(aucun)"} ».`,
-    );
-  }
-
   const [row] = await db
     .insert(autonomousRuns)
     .values({
       userId,
       taskId,
       goal,
-      engine,
-      engineCli: engine === "cli" ? (input.engineCli as CliAgentId) : null,
-      // Sans objet pour un agent CLI, qui choisit son modèle lui-même.
-      boost: engine === "llm" && Boolean(input.boost),
       maxIterations: input.maxIterations ?? null,
       maxCostUsd: Math.max(input.maxCostUsd ?? 0, 0).toFixed(6),
       timeoutMin: input.timeoutMin ?? null,
@@ -190,15 +119,9 @@ export async function enqueueRun(
   return row.id;
 }
 
-/** Ce que la planification a décidé, à écrire sur le run avant sa 1re étape. */
+/** Ce que le démarrage a décidé, à écrire sur le run avant sa 1re étape. */
 export interface RunPlanPatch {
-  engine: ResolvedRunEngine;
-  engineCli?: string | null;
-  plannedLevel: IntelligenceLevel;
   planReason: string;
-  planner: "ai" | "heuristic";
-  /** `null` quand l'utilisateur a imposé le moteur : rien n'a été « routé ». */
-  sourceKind?: SourceKind | null;
   sourceLabel: string;
   maxIterations: number;
   timeoutMin: number;
@@ -219,12 +142,7 @@ export async function applyPlan(
   await db
     .update(autonomousRuns)
     .set({
-      engine: patch.engine,
-      engineCli: patch.engineCli ?? null,
-      plannedLevel: patch.plannedLevel,
       planReason: patch.planReason,
-      planner: patch.planner,
-      sourceKind: patch.sourceKind ?? null,
       sourceLabel: patch.sourceLabel,
       maxIterations: patch.maxIterations,
       timeoutMin: patch.timeoutMin,
@@ -284,29 +202,12 @@ export async function claimNextRun(
 }
 
 /**
- * Remplace le livrable en cours par la version que vient de rendre l'itération.
- *
- * Écrasement plutôt qu'historique : le modèle renvoie le document **complet** à
- * chaque étape, et garder les versions intermédiaires ferait grossir la ligne
- * sans que rien ne les relise.
- */
-export async function saveDraft(
-  runId: string,
-  draft: RunDraft,
-): Promise<void> {
-  await db
-    .update(autonomousRuns)
-    .set({ draft, lockedAt: sql`now()` })
-    .where(eq(autonomousRuns.id, runId));
-}
-
-/**
  * Rafraîchit le verrou d'un run en cours (heartbeat).
  *
  * `claimNextRun` considère un run `running` dont le verrou dépasse `staleLockMs`
  * comme abandonné par un worker mort, et le reprend. Or `recordIteration` ne
- * repousse le verrou qu'entre deux étapes : une étape longue — un agent CLI
- * travaille en minutes — laisserait le verrou pourrir et un second worker
+ * repousse le verrou qu'entre deux étapes : une étape longue — l'agent Claude
+ * Code travaille en minutes — laisserait le verrou pourrir et un second worker
  * relancerait le même run **en parallèle**, écrivant deux fois dans le même
  * workspace. D'où ce battement pendant l'étape elle-même.
  */

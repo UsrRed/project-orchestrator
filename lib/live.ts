@@ -29,9 +29,8 @@ export interface LiveAgent {
   taskId: string;
   goal: string;
   status: RunStatus;
-  /** `llm`, ou l'identifiant du CLI (`claude`, `gemini`…) pour un run CLI. */
+  /** Moteur d'exécution — désormais toujours l'agent Claude Code (`claude`). */
   engine: string;
-  boost: boolean;
   iterations: number;
   /** Null tant que le run n'est pas planifié : la limite n'existe pas encore. */
   maxIterations: number | null;
@@ -102,8 +101,7 @@ export async function liveSnapshot(
       taskId: r.taskId,
       goal: r.goal,
       status: r.status,
-      engine: r.engine === "cli" ? (r.engineCli ?? "cli") : "llm",
-      boost: r.boost,
+      engine: "claude",
       iterations: r.iterations,
       maxIterations: r.maxIterations,
       spentUsd: r.spentUsd,

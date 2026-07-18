@@ -1,16 +1,8 @@
 import Link from "next/link";
 
 import { ExecutionsList } from "@/components/executions-list";
-import { KeysManager } from "@/components/keys-manager";
-import { RouterDemo } from "@/components/router-demo";
+import { cliAgentStatuses } from "@/lib/cli-availability";
 import { executionStats, listExecutions } from "@/lib/executions";
-import { listConnections } from "@/lib/keys";
-import {
-  catalogModelCount,
-  fetchLocalModels,
-  freeModelCount,
-} from "@/lib/model-catalog";
-import { PROVIDERS } from "@/lib/providers";
 import { getCurrentUserId } from "@/lib/users";
 
 const MILESTONES: Array<{ id: string; label: string; done: boolean }> = [
@@ -23,40 +15,30 @@ const MILESTONES: Array<{ id: string; label: string; done: boolean }> = [
   { id: "M6", label: "UI adaptative + widgets", done: true },
 ];
 
-// Les données dépendent de la base (clés, exécutions) → rendu dynamique.
+// Les données dépendent de la base (exécutions) → rendu dynamique.
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
   const userId = await getCurrentUserId();
-  const [connections, executions, stats, localModels] = await Promise.all([
-    listConnections(userId),
+  const [executions, stats] = await Promise.all([
     listExecutions(userId),
     executionStats(userId),
-    fetchLocalModels(),
   ]);
-
-  // Nombre de modèles disponibles par provider (catalogue models.dev + local),
-  // et parmi eux ceux à coût nul (le local l'est intégralement).
-  const modelCounts: Record<string, number> = {};
-  const freeCounts: Record<string, number> = {};
-  for (const p of PROVIDERS) {
-    const local = p.id === "ollama";
-    modelCounts[p.id] = local ? localModels.length : catalogModelCount(p.id);
-    freeCounts[p.id] = local ? localModels.length : freeModelCount(p.id);
-  }
+  const claude = cliAgentStatuses().find((s) => s.id === "claude");
 
   return (
     <main className="mx-auto flex min-h-screen max-w-3xl flex-col gap-10 px-6 py-16">
       <header className="flex flex-col gap-3">
         <span className="text-xs font-medium uppercase tracking-widest text-emerald-400">
-          Orchestration dynamique d&apos;IA
+          Orchestration de projet par Claude Code
         </span>
         <h1 className="text-4xl font-bold tracking-tight">Orchestrato.AI</h1>
         <p className="text-neutral-400">
-          Gestion de projet pilotée par orchestration dynamique d&apos;IA. Le
-          <strong> routeur</strong> choisit le modèle le plus adapté (complexité
-          × contexte × coût), exécute l&apos;appel avec vos clés chiffrées, et
-          journalise le <strong>coût réel</strong>.
+          Gestion de projet pilotée par <strong>Claude Code</strong>. L&apos;agent
+          découpe l&apos;idée en phases, discute, et exécute les tâches
+          autonomes directement dans le workspace — sur l&apos;abonnement de la
+          machine, sans clé API. Chaque appel est journalisé avec ses tokens et
+          son <strong>coût réel</strong>.
         </p>
       </header>
 
@@ -82,36 +64,38 @@ export default async function Home() {
       </div>
 
       <section className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">
-        <div className="mb-1 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Connecteurs LLM</h2>
-          <Link href="/models" className="text-xs text-emerald-400 hover:underline">
-            Voir tous les modèles →
-          </Link>
-        </div>
+        <h2 className="mb-1 text-lg font-semibold">Moteur : Claude Code</h2>
         <p className="mb-4 text-sm text-neutral-500">
-          Choisis un provider, colle ta clé — tous ses modèles deviennent
-          disponibles (catalogue models.dev). Secret stocké chiffré. Le routeur
-          essaie d&apos;abord les modèles <strong>gratuits</strong> (local,
-          OpenCode Zen « big-pickle », OpenRouter <code>:free</code>) et ne
-          bascule sur le payant qu&apos;en repli.
+          L&apos;app n&apos;utilise que le binaire <code>claude</code> installé sur
+          la machine du worker, avec son propre login (abonnement) — aucune clé API
+          ni secret à stocker.
         </p>
-        <KeysManager
-          connections={connections}
-          modelCounts={modelCounts}
-          freeCounts={freeCounts}
-        />
-      </section>
-
-      <section className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">
-        <h2 className="mb-4 text-lg font-semibold">Tester le routeur</h2>
-        <RouterDemo />
+        <div
+          className={`flex items-center gap-3 rounded-lg border px-4 py-3 text-sm ${
+            claude?.available
+              ? "border-emerald-800/60 bg-emerald-950/20 text-emerald-200"
+              : "border-amber-800/60 bg-amber-950/20 text-amber-200"
+          }`}
+        >
+          <span
+            className={`inline-block h-2.5 w-2.5 rounded-full ${
+              claude?.available ? "bg-emerald-400" : "bg-amber-400"
+            }`}
+          />
+          <span>
+            {claude?.available
+              ? "Claude Code est disponible sur la machine du worker."
+              : (claude?.warning ??
+                "Claude Code (`claude`) est introuvable dans le PATH du worker.")}
+          </span>
+        </div>
       </section>
 
       <section className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">
         <h2 className="mb-1 text-lg font-semibold">Suivi du coût réel</h2>
         <p className="mb-4 text-sm text-neutral-500">
-          Table de vérité <code>agent_executions</code> — chaque appel routé y
-          est journalisé.
+          Table de vérité <code>agent_executions</code> — chaque appel de Claude
+          Code y est journalisé, ventilé par modèle.
         </p>
         <ExecutionsList executions={executions} stats={stats} />
       </section>
@@ -145,7 +129,7 @@ export default async function Home() {
       </section>
 
       <footer className="flex items-center justify-between text-xs text-neutral-600">
-        <span>Clés chiffrées · coût réel journalisé · routage multi-provider</span>
+        <span>Claude Code · abonnement · coût réel journalisé</span>
         <Link href="/health" className="hover:text-neutral-300">
           Santé →
         </Link>

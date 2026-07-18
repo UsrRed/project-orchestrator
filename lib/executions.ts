@@ -10,26 +10,35 @@ import "server-only";
 import { and, desc, eq, gte, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import type { CliExecProvider } from "@/lib/cli-agents";
-import type { Provider, Tier } from "@/lib/models";
+import type { CliModelUsage } from "@/lib/cli-agents";
 import { logWarn } from "@/lib/observability";
 import { agentExecutions } from "@/drizzle/schema";
 
 /**
- * Provider journalisable : un provider LLM du routeur, ou un agent CLI.
+ * Provider journalisé dans `agent_executions`.
  *
- * Le type `Provider` reste volontairement limité aux providers LLM : y ajouter
- * les CLI casserait le `switch` exhaustif de `buildModel`
- * ([llm-router.ts](llm-router.ts)) — le routeur n'a rien à faire d'un CLI.
+ * Depuis le passage en « Claude uniquement », le code n'écrit plus que
+ * `claude_cli` (agent Claude Code sur abonnement). Les autres valeurs subsistent
+ * pour **lire l'historique** : la colonne est passée en `text` (migration 0016),
+ * les anciennes lignes gardent leur libellé lisible (`anthropic`, `ollama`…).
  */
-export type ExecProvider = Provider | CliExecProvider;
+export type ExecProvider =
+  | "claude_cli"
+  | "anthropic"
+  | "openai"
+  | "google"
+  | "openrouter"
+  | "opencode"
+  | "groq"
+  | "ollama"
+  | "gemini_cli"
+  | "opencode_cli";
 
 /**
- * Tier journalisé. `"cli"` n'est pas un tier du routeur : un agent CLI choisit
- * son propre modèle, l'app ne le route pas. Le noter `fast` ou `frontier`
- * laisserait croire à un arbitrage qui n'a pas eu lieu.
+ * Tier journalisé. `"cli"` : un agent CLI choisit son propre modèle, l'app ne le
+ * route pas. `fast`/`frontier` restent pour lire l'historique du routeur retiré.
  */
-export type ExecTier = Tier | "cli";
+export type ExecTier = "fast" | "frontier" | "cli";
 
 export interface RecordExecutionInput {
   userId: string;
@@ -81,6 +90,52 @@ export async function recordExecution(
       tier: input.tier,
       label: input.taskLabel,
       error: input.error,
+    });
+  }
+}
+
+/** Métadonnées communes d'un appel Claude synchrone à journaliser. */
+export interface ClaudeExecutionBase {
+  userId: string;
+  taskLabel: string;
+  status: "succeeded" | "failed";
+  startedAt: Date;
+  finishedAt: Date;
+  projectId?: string;
+  taskId?: string;
+  error?: string;
+}
+
+/**
+ * Journalise un appel `claude -p` synchrone (architecture, chat, widget…) —
+ * **une ligne par modèle**, comme le moteur `cli` ([cli-agent.ts](cli-agent.ts)) :
+ * une invocation traverse souvent plusieurs modèles, et agréger perdrait la
+ * ventilation qu'affiche le HUD. Si le CLI n'a rien ventilé, une seule ligne
+ * `model:"claude"` porte le coût, sans inventer de modèle ni de tokens.
+ */
+export async function recordClaudeExecution(
+  base: ClaudeExecutionBase,
+  usage: CliModelUsage[],
+  costUsd: number,
+): Promise<void> {
+  const common = { ...base, provider: "claude_cli" as const, tier: "cli" as const };
+  if (usage.length > 0) {
+    for (const u of usage) {
+      await recordExecution({
+        ...common,
+        model: u.model,
+        promptTokens: u.inputTokens,
+        completionTokens: u.outputTokens,
+        costUsd: u.costUsd,
+      });
+    }
+  } else {
+    await recordExecution({
+      ...common,
+      model: "claude",
+      promptTokens: 0,
+      completionTokens: 0,
+      costUsd,
     });
   }
 }

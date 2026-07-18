@@ -16,7 +16,6 @@ import { accessSync, constants } from "node:fs";
 import { delimiter, join } from "node:path";
 
 import { CLI_AGENTS, type CliAgentId } from "@/lib/cli-agents";
-import type { IntelligenceLevel } from "@/lib/intelligence";
 
 /** Le binaire est-il exécutable quelque part dans le PATH ? */
 export function isBinOnPath(bin: string): boolean {
@@ -38,8 +37,6 @@ export interface CliAgentStatus {
   /** Binaire attendu dans le PATH. */
   bin: string;
   available: boolean;
-  /** Cf. `CliAgentInfo.level` : sert au routage dynamique et à l'affichage. */
-  level: IntelligenceLevel;
   reportsCost: boolean;
   /** Renseigné **uniquement** si indisponible : pourquoi. */
   warning?: string;
@@ -65,7 +62,6 @@ export function cliAgentStatuses(): CliAgentStatus[] {
       label: c.label,
       bin: c.bin,
       available: onPath && !c.knownIssue,
-      level: c.level,
       reportsCost: c.reportsCost,
       warning: !onPath
         ? `Binaire \`${c.bin}\` introuvable dans le PATH.`

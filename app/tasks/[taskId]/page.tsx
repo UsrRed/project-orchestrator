@@ -14,8 +14,6 @@ import {
   listMessages,
   type CoworkOptionsData,
 } from "@/lib/conversation";
-import { cliAgentStatuses } from "@/lib/cli-availability";
-import { getProfile } from "@/lib/profile";
 import { listRunsForTask } from "@/lib/runs";
 import { listPhaseNormes } from "@/lib/normes";
 import { getCurrentUserId } from "@/lib/users";
@@ -62,13 +60,12 @@ export default async function TaskChatPage({
   const ctx = await getTaskContext(userId, taskId);
   if (!ctx) notFound();
 
-  const [messages, artifacts, cowork, runs, norms, profile] = await Promise.all([
+  const [messages, artifacts, cowork, runs, norms] = await Promise.all([
     listMessages(userId, taskId),
     listArtifacts(userId, taskId),
     getCoworkStatus(userId, taskId),
     listRunsForTask(userId, taskId),
     listPhaseNormes(userId, ctx.phaseId),
-    getProfile(userId),
   ]);
 
   const isAutonomous = ctx.taskMode === "autonomous";
@@ -156,12 +153,7 @@ export default async function TaskChatPage({
           faisaient de cette page une devinette (« lequel agit ? »). */}
       {isAutonomous ? (
         <section className="rounded-xl border border-sky-900/50 bg-sky-950/10 p-5">
-          <AutonomousPanel
-            taskId={taskId}
-            runs={runs}
-            cliAgents={cliAgentStatuses()}
-            sourceOrder={profile.sourceOrder}
-          />
+          <AutonomousPanel taskId={taskId} runs={runs} />
         </section>
       ) : (
         <section className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-5">

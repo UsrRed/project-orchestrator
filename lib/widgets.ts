@@ -7,11 +7,12 @@
  * whitelistés (voir components/widget-renderer.tsx), sans `dangerouslySetInnerHTML`
  * ni `eval`. Toute donnée non conforme est rejetée avant rendu.
  */
-import { generateObject } from "ai";
+import "server-only";
+
 import { z } from "zod";
 
-import { runWithFallback, type ProviderKeys } from "@/lib/llm-router";
-import { computeCostUsd, type ModelSpec } from "@/lib/models";
+import { claudeJson } from "@/lib/claude-cli";
+import type { CliModelUsage } from "@/lib/cli-agents";
 import type { TaskContext } from "@/lib/conversation";
 
 // --- Schéma fixe des widgets --------------------------------------------
@@ -88,9 +89,7 @@ export function parseWidget(raw: unknown): Widget | null {
 
 export interface WidgetResult {
   widget: Widget;
-  spec: ModelSpec;
-  promptTokens: number;
-  completionTokens: number;
+  usage: CliModelUsage[];
   costUsd: number;
 }
 
@@ -103,37 +102,15 @@ const WIDGET_HINT =
 export async function generateWidget(
   instruction: string,
   ctx: TaskContext,
-  keys: ProviderKeys,
 ): Promise<WidgetResult> {
   const trimmed = instruction.trim();
   if (!trimmed) throw new Error("Décris le widget à générer.");
 
-  const { value: object, usage, spec } = await runWithFallback(
-    "frontier",
-    keys,
-    async (model, _spec, signal) => {
-      const r = await generateObject({
-        model,
-        schema: widgetSchema,
-        mode: "json",
-        system:
-          `Tu génères un widget d'aide à la décision pour la tâche « ${ctx.taskTitle} » ` +
-          `(projet ${ctx.projectType}). ${WIDGET_HINT}`,
-        prompt: trimmed,
-        abortSignal: signal,
-        maxRetries: 1,
-      });
-      return { value: r.object, usage: r.usage };
-    },
-  );
+  const call = await claudeJson(trimmed, widgetSchema, {
+    system:
+      `Tu génères un widget d'aide à la décision pour la tâche « ${ctx.taskTitle} » ` +
+      `(projet ${ctx.projectType}). ${WIDGET_HINT}`,
+  });
 
-  const promptTokens = usage?.promptTokens ?? 0;
-  const completionTokens = usage?.completionTokens ?? 0;
-  return {
-    widget: object,
-    spec,
-    promptTokens,
-    completionTokens,
-    costUsd: computeCostUsd(spec, promptTokens, completionTokens),
-  };
+  return { widget: call.value, usage: call.usage, costUsd: call.costUsd };
 }

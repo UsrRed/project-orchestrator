@@ -16,7 +16,6 @@ import {
   finishRun,
   getRunFresh,
   recordIteration,
-  saveDraft,
   type RunRow,
 } from "@/lib/runs";
 import { captureException, logInfo } from "@/lib/observability";
@@ -44,19 +43,10 @@ export interface StepResult {
   /** Artefact éventuel produit à cette étape. */
   artifact?: StepArtifact;
   /**
-   * Livrable **complet** dans son état actuel, à conserver pour l'itération
-   * suivante. Persisté sur le run et resservi tel quel : c'est le plan de
-   * travail de l'agent, sans quoi il n'a que sa note de 1-2 phrases pour se
-   * souvenir de ce qu'il produit.
-   *
-   * Sans objet pour un moteur qui écrit ailleurs (le `cli` a son workspace).
-   */
-  draft?: StepArtifact;
-  /**
    * Données libres transmises telles quelles à `onNote`, pour ce qu'une étape
-   * doit se rappeler d'une itération à l'autre (le moteur `cli` y range
-   * l'identifiant de session à reprendre). Volontairement opaque : la boucle
-   * n'a pas à connaître les moteurs.
+   * doit se rappeler d'une itération à l'autre (l'agent CLI y range l'identifiant
+   * de session à reprendre). Volontairement opaque : la boucle n'a pas à
+   * connaître le moteur.
    */
   meta?: Record<string, unknown>;
 }
@@ -141,25 +131,12 @@ export async function processRun(
   const runId = claimed.id;
 
   /**
-   * Termine le run — et **sauve d'abord le livrable en cours** si l'arrêt n'est
-   * pas un succès.
-   *
-   * Un garde-fou qui coupe (itérations épuisées, timeout, plafond, kill) coupait
-   * aussi le travail déjà produit : le brouillon mourait avec le run, et
-   * l'utilisateur ne récupérait rien de ce qu'il avait payé en temps de calcul.
-   * Le statut reste un échec — le run n'a pas convergé, et le dire est utile —
-   * mais l'artefact, lui, est conservé.
-   *
-   * Point de passage unique : tous les chemins d'arrêt passent ici, sinon il
-   * suffit d'en oublier un pour reperdre le brouillon.
+   * Termine le run. L'agent CLI écrit directement dans le workspace du projet :
+   * un arrêt par garde-fou laisse ces changements sur le disque (rien à
+   * « sauver » comme document séparé, contrairement à l'ancien moteur `llm` qui
+   * tenait un brouillon en base). Point de passage unique de tous les arrêts.
    */
   const stop = async (reason: StopReason, error?: string): Promise<void> => {
-    if (reason !== "completed") {
-      const run = await getRunFresh(runId);
-      if (run?.draft && deps.onArtifact) {
-        await deps.onArtifact(run, run.draft, { salvaged: true });
-      }
-    }
     await finishRun(runId, TERMINAL[reason], reason, error, now());
   };
 
@@ -205,11 +182,6 @@ export async function processRun(
       await stop("error", err instanceof Error ? err.message : String(err));
       break;
     }
-
-    // Avant la note et le comptage : c'est le travail lui-même. Une étape qui
-    // avance le livrable puis meurt sur un incident doit tout de même le laisser
-    // derrière elle.
-    if (result.draft) await saveDraft(runId, result.draft);
 
     if (result.note && deps.onNote) {
       await deps.onNote(fresh, result.note, result.meta);

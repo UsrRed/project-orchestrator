@@ -3,18 +3,16 @@
  *
  * À partir d'une idée en langage naturel et d'un type de projet (tech /
  * marketing), génère une arborescence structurée `Project → Phase → Task` via
- * sortie structurée (schéma Zod contraint) du Vercel AI SDK. Le modèle ne
- * produit JAMAIS de code exécutable — uniquement des données conformes au
- * schéma, validées avant persistance.
- *
- * La tâche « architecture » est intrinsèquement complexe → le routeur
- * sélectionne un modèle *frontier*.
+ * Claude Code CLI ([claude-cli.ts](claude-cli.ts)), validée contre un schéma Zod
+ * avant persistance. Le modèle ne produit JAMAIS de code exécutable — uniquement
+ * des données conformes au schéma.
  */
-import { generateObject } from "ai";
+import "server-only";
+
 import { z } from "zod";
 
-import { runWithFallback, type ProviderKeys } from "@/lib/llm-router";
-import { computeCostUsd, type ModelSpec } from "@/lib/models";
+import { claudeJson } from "@/lib/claude-cli";
+import type { CliModelUsage } from "@/lib/cli-agents";
 
 export type ProjectType = "tech" | "marketing";
 
@@ -83,20 +81,17 @@ const SYSTEM_BY_TYPE: Record<ProjectType, string> = {
 
 export interface ArchitectResult {
   architecture: Architecture;
-  spec: ModelSpec;
-  promptTokens: number;
-  completionTokens: number;
+  usage: CliModelUsage[];
   costUsd: number;
 }
 
 /**
- * Génère l'arborescence via un modèle frontier. Lève si aucune clé frontier
- * n'est disponible ou si la sortie ne respecte pas le schéma.
+ * Génère l'arborescence via Claude Code CLI. Lève si la sortie ne respecte pas
+ * le schéma après réparation, ou si le CLI n'est pas joignable.
  */
 export async function generateArchitecture(
   idea: string,
   projectType: ProjectType,
-  keys: ProviderKeys,
   /** Préambule optionnel (langue/ton) dérivé du profil utilisateur. */
   preamble?: string,
 ): Promise<ArchitectResult> {
@@ -106,37 +101,18 @@ export async function generateArchitecture(
   const system =
     (preamble ? preamble.trim() + "\n\n" : "") + SYSTEM_BY_TYPE[projectType];
 
-  const { value: object, usage, spec } = await runWithFallback(
-    "frontier",
-    keys,
-    async (model, _spec, signal) => {
-      const r = await generateObject({
-        model,
-        schema: architectureSchema,
-        // json-mode (response_format) plutôt que tool-mode : compatible avec
-        // les serveurs OpenAI-compatible locaux (LM Studio) comme avec le cloud.
-        mode: "json",
-        system,
-        prompt:
-          `Idée de projet (${projectType}) :\n"""${trimmed}"""\n\n` +
-          "Génère une arborescence de phases et de tâches cohérente, ordonnée " +
-          "et actionnable pour mener ce projet à bien.",
-        abortSignal: signal,
-        maxRetries: 1,
-      });
-      return { value: r.object, usage: r.usage };
-    },
+  const call = await claudeJson(
+    `Idée de projet (${projectType}) :\n"""${trimmed}"""\n\n` +
+      "Génère une arborescence de phases et de tâches cohérente, ordonnée " +
+      "et actionnable pour mener ce projet à bien.",
+    architectureSchema,
+    { system },
   );
 
-  const promptTokens = usage?.promptTokens ?? 0;
-  const completionTokens = usage?.completionTokens ?? 0;
-
   return {
-    architecture: object,
-    spec,
-    promptTokens,
-    completionTokens,
-    costUsd: computeCostUsd(spec, promptTokens, completionTokens),
+    architecture: call.value,
+    usage: call.usage,
+    costUsd: call.costUsd,
   };
 }
 
@@ -161,7 +137,6 @@ export async function refineArchitecture(
   projectType: ProjectType,
   current: Architecture,
   constraint: string,
-  keys: ProviderKeys,
   preamble?: string,
 ): Promise<ArchitectResult> {
   const c = constraint.trim();
@@ -170,36 +145,20 @@ export async function refineArchitecture(
   const system =
     (preamble ? preamble.trim() + "\n\n" : "") + SYSTEM_BY_TYPE[projectType];
 
-  const { value: object, usage, spec } = await runWithFallback(
-    "frontier",
-    keys,
-    async (model, _spec, signal) => {
-      const r = await generateObject({
-        model,
-        schema: architectureSchema,
-        mode: "json",
-        system,
-        prompt:
-          `Idée du projet (${projectType}) :\n"""${idea.trim()}"""\n\n` +
-          `Arborescence actuelle :\n${summarizeArchitecture(current)}\n\n` +
-          `CONTRAINTE / retour à intégrer :\n"""${c}"""\n\n` +
-          "Produis une arborescence RÉVISÉE complète, cohérente et ordonnée, " +
-          "qui tient compte de la contrainte tout en conservant ce qui reste " +
-          "pertinent.",
-        abortSignal: signal,
-        maxRetries: 1,
-      });
-      return { value: r.object, usage: r.usage };
-    },
+  const call = await claudeJson(
+    `Idée du projet (${projectType}) :\n"""${idea.trim()}"""\n\n` +
+      `Arborescence actuelle :\n${summarizeArchitecture(current)}\n\n` +
+      `CONTRAINTE / retour à intégrer :\n"""${c}"""\n\n` +
+      "Produis une arborescence RÉVISÉE complète, cohérente et ordonnée, " +
+      "qui tient compte de la contrainte tout en conservant ce qui reste " +
+      "pertinent.",
+    architectureSchema,
+    { system },
   );
 
-  const promptTokens = usage?.promptTokens ?? 0;
-  const completionTokens = usage?.completionTokens ?? 0;
   return {
-    architecture: object,
-    spec,
-    promptTokens,
-    completionTokens,
-    costUsd: computeCostUsd(spec, promptTokens, completionTokens),
+    architecture: call.value,
+    usage: call.usage,
+    costUsd: call.costUsd,
   };
 }

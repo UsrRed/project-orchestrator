@@ -5,7 +5,6 @@ import { UserMenu } from "@/components/user-menu";
 const LINKS: Array<{ href: string; label: string }> = [
   { href: "/projects", label: "Projets" },
   { href: "/normes", label: "Normes" },
-  { href: "/models", label: "Modèles" },
   { href: "/health", label: "Santé" },
   { href: "/profile", label: "Profil" },
 ];

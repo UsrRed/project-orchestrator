@@ -1,21 +1,22 @@
 /**
  * Agent conversationnel par tâche (Milestone 3) — modes Manuel & Cowork.
  *
- * Fonctions LLM pures (pas de DB) : elles reçoivent le contexte de tâche,
- * l'historique et les clés, appellent le modèle via le routeur (tier adapté au
- * coût), et renvoient le résultat + le coût réel. La persistance (messages,
- * artefacts, journalisation) est faite par la couche action.
+ * Fonctions pures (pas de DB) : elles reçoivent le contexte de tâche et
+ * l'historique, appellent Claude Code CLI ([claude-cli.ts](claude-cli.ts)) sur
+ * l'abonnement de la machine, et renvoient le résultat + la consommation réelle
+ * ventilée par modèle. La persistance (messages, artefacts, journalisation) est
+ * faite par la couche action.
  *
- * Répartition des tiers (démonstration du routeur d'intelligence) :
- *  - Manuel  → 'fast'     (conversation réactive, économique) ;
- *  - Cowork  → 'frontier' (proposition d'options & production d'artefact,
- *    tâches à plus forte valeur de raisonnement).
+ * Depuis le passage en « Claude uniquement », plus de routeur ni de tiers : le
+ * CLI choisit son modèle lui-même. Le chat reste réactif ; on pourrait forcer un
+ * modèle rapide via `claudeText(..., { model })` si la latence gênait.
  */
-import { generateObject, generateText, type CoreMessage } from "ai";
+import "server-only";
+
 import { z } from "zod";
 
-import { runWithFallback, type ProviderKeys } from "@/lib/llm-router";
-import { computeCostUsd, type ModelSpec, type Tier } from "@/lib/models";
+import { claudeJson, claudeText } from "@/lib/claude-cli";
+import type { CliModelUsage } from "@/lib/cli-agents";
 import type { CoworkOptionsData, TaskContext } from "@/lib/conversation";
 
 // --- Contexte système ----------------------------------------------------
@@ -38,63 +39,40 @@ export interface HistoryMessage {
   content: string;
 }
 
-function toCoreMessages(history: HistoryMessage[]): CoreMessage[] {
-  return history.map((m) => ({ role: m.role, content: m.content }));
+/**
+ * Aplati l'historique en un seul prompt : `claude -p` prend un unique message,
+ * là où l'ancien SDK recevait un tableau. Le dernier tour utilisateur reste en
+ * bas, précédé du contexte de la conversation.
+ */
+function historyToPrompt(history: HistoryMessage[]): string {
+  return history
+    .map((m) => `${m.role === "user" ? "Utilisateur" : "Assistant"} : ${m.content}`)
+    .join("\n\n");
 }
 
 // --- Résultat commun -----------------------------------------------------
 
-interface LlmMeta {
-  spec: ModelSpec;
-  tier: Tier;
-  promptTokens: number;
-  completionTokens: number;
+/** Consommation réelle d'un appel Claude, à journaliser par la couche action. */
+export interface ClaudeMeta {
+  usage: CliModelUsage[];
   costUsd: number;
-}
-
-function metaFrom(
-  spec: ModelSpec,
-  tier: Tier,
-  usage: { promptTokens?: number; completionTokens?: number } | undefined,
-): LlmMeta {
-  const promptTokens = usage?.promptTokens ?? 0;
-  const completionTokens = usage?.completionTokens ?? 0;
-  return {
-    spec,
-    tier,
-    promptTokens,
-    completionTokens,
-    costUsd: computeCostUsd(spec, promptTokens, completionTokens),
-  };
 }
 
 // --- Mode Manuel : réponse réactive -------------------------------------
 
-export interface ManualResult extends LlmMeta {
+export interface ManualResult extends ClaudeMeta {
   text: string;
 }
 
 export async function manualReply(
   ctx: TaskContext,
   history: HistoryMessage[],
-  keys: ProviderKeys,
   normsText?: string,
 ): Promise<ManualResult> {
-  const { value: text, usage, spec } = await runWithFallback(
-    "fast",
-    keys,
-    async (model, _spec, signal) => {
-      const r = await generateText({
-        model,
-        system: systemPrompt(ctx, normsText),
-        messages: toCoreMessages(history),
-        abortSignal: signal,
-        maxRetries: 1,
-      });
-      return { value: r.text, usage: r.usage };
-    },
-  );
-  return { text, ...metaFrom(spec, "fast", usage) };
+  const call = await claudeText(historyToPrompt(history), {
+    system: systemPrompt(ctx, normsText),
+  });
+  return { text: call.text, usage: call.usage, costUsd: call.costUsd };
 }
 
 // --- Mode Cowork : proposition d'options (point d'arrêt) -----------------
@@ -117,36 +95,22 @@ const coworkOptionsSchema = z.object({
     .describe("Options distinctes proposées à l'utilisateur."),
 });
 
-export interface OptionsResult extends LlmMeta {
+export interface OptionsResult extends ClaudeMeta {
   data: CoworkOptionsData;
 }
 
 export async function proposeCoworkOptions(
   ctx: TaskContext,
   history: HistoryMessage[],
-  keys: ProviderKeys,
   normsText?: string,
 ): Promise<OptionsResult> {
-  const { value: object, usage, spec } = await runWithFallback(
-    "frontier",
-    keys,
-    async (model, _spec, signal) => {
-      const r = await generateObject({
-        model,
-        schema: coworkOptionsSchema,
-        mode: "json",
-        system:
-          systemPrompt(ctx, normsText) +
-          "\n\nMode COWORK : propose 3 options distinctes pour avancer, puis " +
-          "attends le choix de l'utilisateur. Ne tranche pas à sa place.",
-        messages: toCoreMessages(history),
-        abortSignal: signal,
-        maxRetries: 1,
-      });
-      return { value: r.object, usage: r.usage };
-    },
-  );
-  return { data: object, ...metaFrom(spec, "frontier", usage) };
+  const call = await claudeJson(historyToPrompt(history), coworkOptionsSchema, {
+    system:
+      systemPrompt(ctx, normsText) +
+      "\n\nMode COWORK : propose 3 options distinctes pour avancer, puis " +
+      "attends le choix de l'utilisateur. Ne tranche pas à sa place.",
+  });
+  return { data: call.value, usage: call.usage, costUsd: call.costUsd };
 }
 
 // --- Mode Cowork : production d'artefact après choix ---------------------
@@ -155,12 +119,10 @@ const artifactSchema = z.object({
   title: z.string().describe("Titre de l'artefact produit."),
   content: z
     .string()
-    .describe(
-      "Contenu de l'artefact en Markdown, prêt à l'emploi et détaillé.",
-    ),
+    .describe("Contenu de l'artefact en Markdown, prêt à l'emploi et détaillé."),
 });
 
-export interface ArtifactResult extends LlmMeta {
+export interface ArtifactResult extends ClaudeMeta {
   title: string;
   content: string;
 }
@@ -169,29 +131,22 @@ export async function produceCoworkArtifact(
   ctx: TaskContext,
   history: HistoryMessage[],
   chosenOption: { title: string; detail: string },
-  keys: ProviderKeys,
   normsText?: string,
 ): Promise<ArtifactResult> {
-  const { value: object, usage, spec } = await runWithFallback(
-    "frontier",
-    keys,
-    async (model, _spec, signal) => {
-      const r = await generateObject({
-        model,
-        schema: artifactSchema,
-        mode: "json",
-        system:
-          systemPrompt(ctx, normsText) +
-          "\n\nMode COWORK : l'utilisateur a choisi une option. Produis " +
-          "l'artefact correspondant (document Markdown), concret et complet.",
-        prompt:
-          `Option retenue : « ${chosenOption.title} » — ${chosenOption.detail}\n\n` +
-          "Produis l'artefact final correspondant à ce choix.",
-        abortSignal: signal,
-        maxRetries: 1,
-      });
-      return { value: r.object, usage: r.usage };
-    },
-  );
-  return { title: object.title, content: object.content, ...metaFrom(spec, "frontier", usage) };
+  const prompt =
+    `${historyToPrompt(history)}\n\n` +
+    `Option retenue : « ${chosenOption.title} » — ${chosenOption.detail}\n\n` +
+    "Produis l'artefact final correspondant à ce choix.";
+  const call = await claudeJson(prompt, artifactSchema, {
+    system:
+      systemPrompt(ctx, normsText) +
+      "\n\nMode COWORK : l'utilisateur a choisi une option. Produis " +
+      "l'artefact correspondant (document Markdown), concret et complet.",
+  });
+  return {
+    title: call.value.title,
+    content: call.value.content,
+    usage: call.usage,
+    costUsd: call.costUsd,
+  };
 }

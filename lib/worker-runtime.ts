@@ -17,21 +17,9 @@
  */
 import "server-only";
 
-import { makeAutonomousDeps } from "@/lib/autonomous-agent";
 import { makeCliAgentDeps } from "@/lib/cli-agent";
-import { cliAgentInfo, isCliAgentId } from "@/lib/cli-agents";
 import { addMessage, getTaskContext } from "@/lib/conversation";
-import { recordExecution } from "@/lib/executions";
-import { getProviderConnections } from "@/lib/keys";
-import { estimateTokens } from "@/lib/llm-router";
-import { getProfile } from "@/lib/profile";
 import { captureException, logInfo } from "@/lib/observability";
-import {
-  noSourceMessage,
-  planRun,
-  resolveSource,
-  type RunPlan,
-} from "@/lib/run-planner";
 import {
   applyPlan,
   claimNextRun,
@@ -40,23 +28,22 @@ import {
   touchRun,
   type RunRow,
 } from "@/lib/runs";
-import type { SourceKind } from "@/lib/sources";
 import { processRun, type WorkerDeps } from "@/lib/worker";
 
 /**
- * Un run déjà planifié : `engine` est résolu, les limites sont posées. C'est ce
- * que la boucle d'itérations attend.
+ * Un run dont les limites sont posées. C'est ce que la boucle d'itérations attend.
  */
 type PreparedRun = RunRow & { maxIterations: number };
 
+/** L'unique source d'exécution depuis le passage en « Claude uniquement ». */
+const SOURCE_LABEL = "Claude Code (abonnement)";
+
 /**
- * Facteur appliqué à l'objectif pour estimer le contexte que le modèle devra
- * tenir. L'objectif n'est qu'une fraction du prompt réel : s'y ajoutent le
- * système, les normes de la phase, les notes des itérations précédentes et
- * l'artefact produit. Sous-estimer élirait un modèle trop étroit, qui
- * tronquerait sa propre progression au fil des étapes.
+ * Limites par défaut de l'agent Claude Code : il boucle déjà en interne, une
+ * invocation suffit — mais elle dure des minutes, pas des secondes.
  */
-const CONTEXT_HEADROOM = 4;
+const DEFAULT_MAX_ITERATIONS = 1;
+const DEFAULT_TIMEOUT_MIN = 30;
 
 /**
  * Période du battement de verrou. Doit rester largement sous les 60 s de
@@ -66,20 +53,20 @@ const CONTEXT_HEADROOM = 4;
 const HEARTBEAT_MS = 20_000;
 
 /**
- * Planifie un run réclamé et fige son plan en base.
+ * Pose les limites du run et arme son timeout.
  *
- * Respecte ce que l'utilisateur a imposé : un moteur choisi à la main n'est pas
- * re-routé, une limite saisie n'est pas réestimée. L'IA ne comble que les trous.
- * Renvoie `null` si le run a été terminé en échec (aucune source utilisable) —
- * l'appelant n'a alors rien à exécuter.
+ * Plus de planification par IA ni de routage : un seul moteur (l'agent Claude
+ * Code), une seule source (l'abonnement). On ne fait que compléter les limites
+ * que l'utilisateur n'a pas imposées. Renvoie `null` si le run a été terminé en
+ * échec — l'appelant n'a alors rien à exécuter.
  */
 async function prepareRun(run: RunRow): Promise<PreparedRun | null> {
   const fail = async (message: string): Promise<null> => {
     await addMessage(run.taskId, {
       role: "assistant",
       content: message,
-      // Surtout pas `auto_step` : les moteurs relisent ces messages-là comme la
-      // progression du run et les imiteraient.
+      // Surtout pas `auto_step` : le moteur relit ces messages-là comme la
+      // progression du run et les imiterait.
       kind: "auto_notice",
     });
     await finishRun(run.id, "failed", "error", message);
@@ -89,85 +76,16 @@ async function prepareRun(run: RunRow): Promise<PreparedRun | null> {
   const taskCtx = await getTaskContext(run.userId, run.taskId);
   if (!taskCtx) return fail("Tâche introuvable : run abandonné.");
 
-  const keys = await getProviderConnections(run.userId);
-  const profile = await getProfile(run.userId);
-
-  // Le moteur imposé change la forme des limites (un CLI boucle en interne),
-  // donc la planification doit le connaître avant d'estimer.
-  const forcedCli = run.engine === "cli";
-  const plan: RunPlan = await planRun(
-    {
-      goal: run.goal,
-      taskTitle: taskCtx.taskTitle,
-      projectName: taskCtx.projectName,
-      projectType: taskCtx.projectType,
-      cliEngine: forcedCli,
-    },
-    keys,
-  );
-
-  // La planification est un appel modèle comme un autre : le taire creuserait un
-  // trou dans le suivi des tokens (HUD, /health) et dans le coût du projet —
-  // qu'il soit gratuit ne le rend pas invisible.
-  if (plan.usage) {
-    await recordExecution({
-      userId: run.userId,
-      taskLabel: `[plan] ${taskCtx.taskTitle}`,
-      projectId: taskCtx.projectId,
-      taskId: run.taskId,
-      provider: plan.usage.spec.provider,
-      model: plan.usage.spec.modelId,
-      tier: "fast",
-      status: "succeeded",
-      promptTokens: plan.usage.promptTokens,
-      completionTokens: plan.usage.completionTokens,
-      costUsd: plan.usage.costUsd,
-      startedAt: plan.usage.startedAt,
-      finishedAt: plan.usage.finishedAt,
-    });
-  }
-
-  // Routage dynamique : seulement si l'utilisateur n'a pas choisi lui-même.
-  let engine: "llm" | "cli" = forcedCli ? "cli" : "llm";
-  let engineCli: string | null = run.engineCli;
-  // Un moteur imposé n'est pas issu du routage : on ne lui invente pas de
-  // source. `paid` serait faux sur un run à plafond 0, et `subscription` ne dit
-  // rien du modèle qu'un CLI choisira lui-même.
-  let sourceKind: SourceKind | null = forcedCli ? "subscription" : null;
-  let sourceLabel = forcedCli
-    ? `Abonnement — ${cliAgentInfo(run.engineCli ?? "")?.label ?? run.engineCli}`
-    : "Routeur LLM (imposé)";
-
-  if (run.engine === "auto") {
-    const resolved = resolveSource({
-      level: plan.level,
-      keys,
-      order: profile.sourceOrder,
-      maxCostUsd: run.maxCostUsd,
-      minContext: Math.ceil(estimateTokens(run.goal) * CONTEXT_HEADROOM),
-    });
-    if (!resolved) return fail(noSourceMessage(plan.level, run.maxCostUsd));
-    engine = resolved.engine;
-    engineCli = resolved.engineCli ?? null;
-    sourceKind = resolved.kind;
-    sourceLabel = resolved.label;
-  }
-
-  // Le moteur peut avoir basculé vers un CLI après estimation : ses limites ne
-  // sont pas celles d'une boucle `llm`.
-  const cliNow = engine === "cli";
-  const maxIterations = run.maxIterations ?? (cliNow ? 1 : plan.maxIterations);
-  const timeoutMin =
-    run.timeoutMin ?? Math.max(plan.timeoutMin, cliNow ? 30 : 1);
+  const imposed = run.maxIterations !== null || run.timeoutMin !== null;
+  const maxIterations = run.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+  const timeoutMin = run.timeoutMin ?? DEFAULT_TIMEOUT_MIN;
+  const planReason = imposed
+    ? "Limites imposées par l'utilisateur."
+    : "Limites par défaut de l'agent Claude Code.";
 
   await applyPlan(run.id, {
-    engine,
-    engineCli,
-    plannedLevel: plan.level,
-    planReason: plan.reason,
-    planner: plan.planner,
-    sourceKind,
-    sourceLabel,
+    planReason,
+    sourceLabel: SOURCE_LABEL,
     maxIterations,
     timeoutMin,
   });
@@ -175,47 +93,21 @@ async function prepareRun(run: RunRow): Promise<PreparedRun | null> {
   await addMessage(run.taskId, {
     role: "assistant",
     content:
-      `Plan du run — niveau ${plan.level} requis, ${maxIterations} itération(s) max, ` +
-      `${timeoutMin} min max. Source : ${sourceLabel}. ${plan.reason}` +
-      (plan.planner === "heuristic"
-        ? " (estimation par défaut : aucun modèle gratuit n'était disponible pour évaluer.)"
-        : ""),
+      `Plan du run — ${maxIterations} itération(s) max, ${timeoutMin} min max. ` +
+      `Source : ${SOURCE_LABEL}. ${planReason}`,
     kind: "auto_plan",
   });
 
   const fresh = await getRunFresh(run.id);
   if (!fresh || fresh.maxIterations === null) {
-    return fail("La planification du run n'a pas pu être enregistrée.");
+    return fail("La préparation du run n'a pas pu être enregistrée.");
   }
   return fresh as PreparedRun;
 }
 
-/** Construit les dépendances d'exécution du moteur résolu. */
-async function depsFor(run: PreparedRun): Promise<WorkerDeps | null> {
-  if (run.engine === "cli" && run.engineCli && isCliAgentId(run.engineCli)) {
-    // Un run `cli` n'a besoin d'aucune clé LLM : l'agent CLI s'authentifie avec
-    // son propre login.
-    return makeCliAgentDeps(run.userId, run.engineCli);
-  }
-  const keys = await getProviderConnections(run.userId);
-  if (Object.keys(keys).length === 0) {
-    await finishRun(
-      run.id,
-      "failed",
-      "error",
-      "Aucune clé API disponible pour exécuter ce run.",
-    );
-    return null;
-  }
-  return makeAutonomousDeps(run.userId, keys, {
-    boost: run.boost,
-    minLevel: run.plannedLevel ?? undefined,
-    // Le plafond à 0 est une contrainte de sélection, pas seulement un
-    // garde-fou : sans ça le routeur élirait un payant et le run s'arrêterait
-    // au premier centime, après l'avoir dépensé.
-    freeOnly: run.maxCostUsd <= 0,
-    restrictTo: run.sourceKind === "local" ? ["ollama"] : undefined,
-  });
+/** Dépendances d'exécution : toujours l'agent Claude Code, sur l'abonnement. */
+function depsFor(run: PreparedRun): WorkerDeps {
+  return makeCliAgentDeps(run.userId, "claude");
 }
 
 /**
@@ -241,10 +133,7 @@ export async function processNextQueuedRun(): Promise<boolean> {
     const prepared = await prepareRun(claimed);
     if (!prepared) return true;
 
-    const deps = await depsFor(prepared);
-    if (!deps) return true;
-
-    const final = await processRun(prepared, deps);
+    const final = await processRun(prepared, depsFor(prepared));
     logInfo("worker.run_done", {
       runId: final.id,
       status: final.status,

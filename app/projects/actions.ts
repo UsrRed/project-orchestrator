@@ -19,8 +19,7 @@ import {
   repoUrlFor,
   slugifyRepoName,
 } from "@/lib/github";
-import { getProviderConnections } from "@/lib/keys";
-import { recordExecution } from "@/lib/executions";
+import { recordClaudeExecution } from "@/lib/executions";
 import {
   associateNorme,
   autoAssociateProjectNorms,
@@ -154,14 +153,6 @@ export async function generateProjectAction(
   if (!idea) return { ok: false, message: "Décris ton idée de projet." };
 
   const userId = await getCurrentUserId();
-  const keys = await getProviderConnections(userId);
-  if (Object.keys(keys).length === 0) {
-    return {
-      ok: false,
-      message:
-        "Aucune clé API enregistrée. Ajoute une clé (Anthropic, OpenAI…) sur la page d'accueil pour générer.",
-    };
-  }
 
   // Dépôt d'abord : une erreur ici (URL invalide, accès manquant) doit revenir
   // dans le formulaire sans avoir dépensé un seul token.
@@ -182,7 +173,6 @@ export async function generateProjectAction(
     const result = await generateArchitecture(
       idea,
       type,
-      keys,
       profilePreamble(profile),
     );
     projectId = await createProjectFromArchitecture(
@@ -198,20 +188,18 @@ export async function generateProjectAction(
     if (profile.defaultBudgetUsd && profile.defaultBudgetUsd > 0) {
       await setBudget(userId, projectId, profile.defaultBudgetUsd);
     }
-    await recordExecution({
-      userId,
-      taskLabel: `[architecture] ${result.architecture.projectName}`,
-      projectId,
-      provider: result.spec.provider,
-      model: result.spec.modelId,
-      tier: "frontier",
-      status: "succeeded",
-      promptTokens: result.promptTokens,
-      completionTokens: result.completionTokens,
-      costUsd: result.costUsd,
-      startedAt,
-      finishedAt: new Date(),
-    });
+    await recordClaudeExecution(
+      {
+        userId,
+        taskLabel: `[architecture] ${result.architecture.projectName}`,
+        projectId,
+        status: "succeeded",
+        startedAt,
+        finishedAt: new Date(),
+      },
+      result.usage,
+      result.costUsd,
+    );
   } catch (err) {
     await captureException(err, "architect.failed", { userId, type });
     const base =
@@ -248,10 +236,6 @@ export async function refineProjectAction(
   const tree = await getProjectTree(userId, projectId);
   if (!tree) return { ok: false, message: "Projet introuvable." };
 
-  const keys = await getProviderConnections(userId);
-  if (Object.keys(keys).length === 0) {
-    return { ok: false, message: "Aucune connexion LLM. Ajoute-en une sur l'accueil." };
-  }
   try {
     await assertWithinBudget(projectId);
   } catch (err) {
@@ -281,25 +265,22 @@ export async function refineProjectAction(
       tree.type as ProjectType,
       current,
       constraint,
-      keys,
       profilePreamble(profile),
     );
     await replaceProjectTree(userId, projectId, result.architecture);
     await autoAssociateProjectNorms(userId, projectId);
-    await recordExecution({
-      userId,
-      taskLabel: `[raffinement] ${result.architecture.projectName}`,
-      projectId,
-      provider: result.spec.provider,
-      model: result.spec.modelId,
-      tier: "frontier",
-      status: "succeeded",
-      promptTokens: result.promptTokens,
-      completionTokens: result.completionTokens,
-      costUsd: result.costUsd,
-      startedAt,
-      finishedAt: new Date(),
-    });
+    await recordClaudeExecution(
+      {
+        userId,
+        taskLabel: `[raffinement] ${result.architecture.projectName}`,
+        projectId,
+        status: "succeeded",
+        startedAt,
+        finishedAt: new Date(),
+      },
+      result.usage,
+      result.costUsd,
+    );
   } catch (err) {
     await captureException(err, "architect.refine_failed", { userId, projectId });
     return {

@@ -7,10 +7,7 @@ import {
   startRunAction,
   type RunFormState,
 } from "@/app/tasks/[taskId]/actions";
-import type { CliAgentStatus } from "@/lib/cli-availability";
-import { LEVEL_LABEL, type IntelligenceLevel } from "@/lib/intelligence";
 import type { RunRow } from "@/lib/runs";
-import { SOURCE_LABEL, type OrderedSourceKind } from "@/lib/sources";
 
 const INITIAL: RunFormState = { ok: false, message: "" };
 
@@ -46,25 +43,15 @@ const fieldClass =
 export function AutonomousPanel({
   taskId,
   runs,
-  cliAgents,
-  sourceOrder,
 }: {
   taskId: string;
   runs: RunRow[];
-  /** Agents CLI détectés sur la machine (cf. lib/cli-availability.ts). */
-  cliAgents: CliAgentStatus[];
-  /** Ordre de préférence des sources, issu du profil. */
-  sourceOrder: readonly OrderedSourceKind[];
 }) {
   const [state, formAction, pending] = useActionState(startRunAction, INITIAL);
 
-  // Deux réglages avancés, repliés par défaut : sans eux, l'IA décide de tout.
-  const [customModel, setCustomModel] = useState(false);
+  // Un seul réglage avancé, replié par défaut : sans lui, l'agent décide de ses
+  // limites (une invocation, 30 min max).
   const [customLimits, setCustomLimits] = useState(false);
-  const [engine, setEngine] = useState("llm");
-
-  const isCli = customModel && engine !== "llm";
-  const selected = cliAgents.find((c) => c.id === engine);
 
   return (
     <div className="flex flex-col gap-5">
@@ -79,11 +66,13 @@ export function AutonomousPanel({
             name="goal"
             rows={3}
             required
-            placeholder="Ex : rédiger un plan détaillé pour cette tâche, avec les étapes et les risques."
+            placeholder="Ex : implémenter cette tâche directement dans le dépôt, avec un résumé des changements."
             className={fieldClass}
           />
           <span className="text-xs text-neutral-500">
-            C&apos;est la seule chose obligatoire : l&apos;IA en déduit le reste.
+            Claude Code travaille dans le workspace du projet, sur l&apos;abonnement
+            de la machine — il modifie réellement les fichiers (sans commiter ni
+            pousser : tu reliras le diff).
           </span>
         </label>
 
@@ -104,103 +93,21 @@ export function AutonomousPanel({
             />
           </div>
           <span className="text-xs text-neutral-500">
-            <strong className="text-emerald-400">0 = ne rien dépenser</strong> :
-            le run n&apos;utilisera que ton modèle local, ton abonnement ou des
-            modèles gratuits. Au-dessus de 0, les modèles payants deviennent
-            possibles si rien de gratuit n&apos;est assez capable.
+            <strong className="text-emerald-400">0 = ne rien facturer</strong> :
+            l&apos;abonnement Claude reste gratuit au token ; ce plafond n&apos;arrête
+            le run que si un coût réel apparaissait malgré tout.
           </span>
         </label>
 
-        {/* --- Réglages avancés ------------------------------------------ */}
+        {/* --- Réglage avancé -------------------------------------------- */}
 
         <div className="flex flex-col gap-3 rounded-lg border border-neutral-800 bg-neutral-950/50 p-4">
-          <Toggle
-            name="customModel"
-            checked={customModel}
-            onChange={setCustomModel}
-            label="Choisir le modèle moi-même"
-            hint={
-              <>
-                Par défaut, l&apos;IA évalue la difficulté de la tâche puis prend
-                la source la moins chère qui en est capable, dans cet ordre :{" "}
-                <strong className="text-neutral-300">
-                  {sourceOrder.map((s) => SOURCE_LABEL[s]).join(" → ")}
-                </strong>{" "}
-                (modifiable dans ton profil).
-              </>
-            }
-          />
-
-          {customModel && (
-            <div className="flex flex-col gap-3 border-l border-neutral-800 pl-4">
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-neutral-400">Moteur d&apos;exécution</span>
-                <select
-                  name="engine"
-                  value={engine}
-                  onChange={(e) => setEngine(e.target.value)}
-                  className={fieldClass}
-                >
-                  <option value="llm">Routeur LLM — produit du texte</option>
-                  {cliAgents.map((c) => (
-                    <option key={c.id} value={c.id} disabled={!c.available}>
-                      {c.label} (abonnement)
-                      {c.available ? " — écrit du code" : " — indisponible"}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              {isCli && (
-                <p className="rounded-lg border border-amber-900 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
-                  L&apos;agent <code>{engine}</code> s&apos;exécute sur la machine
-                  du worker, dans le workspace du projet : il{" "}
-                  <strong>modifie réellement les fichiers</strong> (sans commiter
-                  ni pousser — tu reliras le diff). Il utilise son propre login,
-                  aucune clé API de l&apos;app.
-                  {selected && !selected.reportsCost && (
-                    <>
-                      {" "}
-                      Il ne remonte aucun coût :{" "}
-                      <strong>le plafond ne le limitera pas</strong> — seuls les
-                      itérations et le timeout le borneront.
-                    </>
-                  )}
-                </p>
-              )}
-
-              {selected?.warning && !selected.available && (
-                <p className="rounded-lg border border-red-900 bg-red-950/20 px-3 py-2 text-xs text-red-200">
-                  {selected.warning}
-                </p>
-              )}
-
-              {/* Sans objet en moteur CLI : l'agent choisit son modèle lui-même. */}
-              {!isCli && (
-                <label className="flex items-start gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    name="boost"
-                    className="mt-1 accent-sky-500"
-                  />
-                  <span>
-                    <span className="text-neutral-300">Boost</span>
-                    <span className="block text-xs text-neutral-500">
-                      Prendre le modèle le plus capable au lieu du moins cher qui
-                      suffit. Plus coûteux — le plafond le borne.
-                    </span>
-                  </span>
-                </label>
-              )}
-            </div>
-          )}
-
           <Toggle
             name="customLimits"
             checked={customLimits}
             onChange={setCustomLimits}
             label="Fixer les limites moi-même"
-            hint="Par défaut, l'IA estime le nombre d'étapes et la durée d'après l'objectif. Le plafond de dépense, lui, reste toujours le tien."
+            hint="Par défaut : une invocation de l'agent (qui boucle déjà en interne), 30 min max. Le plafond de dépense, lui, reste toujours le tien."
           />
 
           {customLimits && (
@@ -228,7 +135,7 @@ export function AutonomousPanel({
                 />
               </label>
               <p className="col-span-2 text-xs text-neutral-600">
-                Laisse un champ vide pour que l&apos;IA l&apos;estime quand même.
+                Laisse un champ vide pour garder la valeur par défaut.
               </p>
             </div>
           )}
@@ -303,7 +210,7 @@ function Toggle({
 
 function RunItem({ run: r, taskId }: { run: RunRow; taskId: string }) {
   const active = r.status === "queued" || r.status === "running";
-  // Un run non planifié n'a pas encore de limites : afficher « 0/5 » serait
+  // Un run non préparé n'a pas encore de limites : afficher « 0/5 » serait
   // inventer une borne que rien n'a décidée.
   const planned = r.maxIterations !== null;
 
@@ -323,25 +230,7 @@ function RunItem({ run: r, taskId }: { run: RunRow; taskId: string }) {
           </span>
         ) : (
           <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-500">
-            source en cours de choix…
-          </span>
-        )}
-        {r.plannedLevel !== null && (
-          <span
-            className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400"
-            title={
-              r.planner === "heuristic"
-                ? "Estimation par défaut (aucune IA gratuite disponible)."
-                : "Niveau estimé par l'IA — une estimation, pas une mesure."
-            }
-          >
-            niveau {r.plannedLevel} {LEVEL_LABEL[r.plannedLevel as IntelligenceLevel]}
-            {r.planner === "heuristic" && " ~"}
-          </span>
-        )}
-        {r.boost && (
-          <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-fuchsia-300">
-            boost
+            en préparation…
           </span>
         )}
         {active && (

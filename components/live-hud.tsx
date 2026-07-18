@@ -374,7 +374,6 @@ function AgentRow({ agent: a }: { agent: LiveAgent }) {
           </span>
           <span className="rounded bg-neutral-800 px-1.5 py-0.5 font-mono text-[10px] text-neutral-400">
             {a.engine}
-            {a.boost && <span className="text-fuchsia-300"> +boost</span>}
           </span>
           {a.elapsedMs !== null && (
             <span className="ml-auto font-mono text-[10px] text-neutral-600">

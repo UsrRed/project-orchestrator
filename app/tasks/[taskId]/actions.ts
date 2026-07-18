@@ -6,6 +6,7 @@ import {
   manualReply,
   produceCoworkArtifact,
   proposeCoworkOptions,
+  type ClaudeMeta,
   type HistoryMessage,
 } from "@/lib/agent";
 import {
@@ -16,24 +17,21 @@ import {
   listMessages,
   setTaskMode,
 } from "@/lib/conversation";
-import { isCliAgentId } from "@/lib/cli-agents";
 import { cliAgentStatuses } from "@/lib/cli-availability";
-import { recordExecution } from "@/lib/executions";
-import { getProviderConnections } from "@/lib/keys";
+import { recordClaudeExecution } from "@/lib/executions";
 import { assertWithinBudget } from "@/lib/budgets";
 import { buildPhaseNormsContext } from "@/lib/normes";
 import { enqueueRun, requestKill } from "@/lib/runs";
 import { generateWidget } from "@/lib/widgets";
 import { getCurrentUserId } from "@/lib/users";
 import type { TaskMode } from "@/lib/projects";
-import type { ModelSpec, Tier } from "@/lib/models";
 
 export interface ChatState {
   ok: boolean;
   message: string;
 }
 
-/** Historique aplati pour le LLM (les options Cowork deviennent du texte). */
+/** Historique aplati pour l'agent (les options Cowork deviennent du texte). */
 async function buildHistory(
   userId: string,
   taskId: string,
@@ -47,34 +45,26 @@ async function buildHistory(
 async function record(
   userId: string,
   label: string,
-  meta: {
-    spec: ModelSpec;
-    tier: Tier;
-    promptTokens: number;
-    completionTokens: number;
-    costUsd: number;
-  },
+  meta: ClaudeMeta,
   status: "succeeded" | "failed",
   startedAt: Date,
   link: { projectId: string; taskId: string },
   error?: string,
 ): Promise<void> {
-  await recordExecution({
-    userId,
-    taskLabel: label,
-    projectId: link.projectId,
-    taskId: link.taskId,
-    provider: meta.spec.provider,
-    model: meta.spec.modelId,
-    tier: meta.tier,
-    status,
-    promptTokens: meta.promptTokens,
-    completionTokens: meta.completionTokens,
-    costUsd: meta.costUsd,
-    error,
-    startedAt,
-    finishedAt: new Date(),
-  });
+  await recordClaudeExecution(
+    {
+      userId,
+      taskLabel: label,
+      projectId: link.projectId,
+      taskId: link.taskId,
+      status,
+      startedAt,
+      finishedAt: new Date(),
+      error,
+    },
+    meta.usage,
+    meta.costUsd,
+  );
 }
 
 const VALID_MODES: ReadonlySet<string> = new Set<TaskMode>([
@@ -110,14 +100,6 @@ export async function sendMessageAction(
   const ctx = await getTaskContext(userId, taskId);
   if (!ctx) return { ok: false, message: "Tâche introuvable." };
 
-  const keys = await getProviderConnections(userId);
-  if (Object.keys(keys).length === 0) {
-    return {
-      ok: false,
-      message: "Aucune clé API. Ajoute-en une sur l'accueil pour discuter.",
-    };
-  }
-
   try {
     await assertWithinBudget(ctx.projectId);
   } catch (err) {
@@ -131,7 +113,7 @@ export async function sendMessageAction(
 
   try {
     if (ctx.taskMode === "cowork") {
-      const res = await proposeCoworkOptions(ctx, history, keys, norms.text);
+      const res = await proposeCoworkOptions(ctx, history, norms.text);
       const rendered =
         res.data.intro +
         "\n\n" +
@@ -146,7 +128,7 @@ export async function sendMessageAction(
       });
       await record(userId, `[cowork:options] ${ctx.taskTitle}`, res, "succeeded", startedAt, { projectId: ctx.projectId, taskId });
     } else {
-      const res = await manualReply(ctx, history, keys, norms.text);
+      const res = await manualReply(ctx, history, norms.text);
       await addMessage(taskId, { role: "assistant", content: res.text });
       await record(userId, `[manuel] ${ctx.taskTitle}`, res, "succeeded", startedAt, { projectId: ctx.projectId, taskId });
     }
@@ -182,10 +164,6 @@ export async function generateWidgetAction(
   const ctx = await getTaskContext(userId, taskId);
   if (!ctx) return { ok: false, message: "Tâche introuvable." };
 
-  const keys = await getProviderConnections(userId);
-  if (Object.keys(keys).length === 0) {
-    return { ok: false, message: "Aucune clé API. Ajoute-en une sur l'accueil." };
-  }
   try {
     await assertWithinBudget(ctx.projectId);
   } catch (err) {
@@ -194,7 +172,7 @@ export async function generateWidgetAction(
 
   const startedAt = new Date();
   try {
-    const res = await generateWidget(instruction, ctx, keys);
+    const res = await generateWidget(instruction, ctx);
     await addArtifact(taskId, {
       type: "widget",
       title: res.widget.title,
@@ -203,7 +181,7 @@ export async function generateWidgetAction(
     await record(
       userId,
       `[widget] ${res.widget.title}`,
-      { spec: res.spec, tier: "frontier", promptTokens: res.promptTokens, completionTokens: res.completionTokens, costUsd: res.costUsd },
+      { usage: res.usage, costUsd: res.costUsd },
       "succeeded",
       startedAt,
       { projectId: ctx.projectId, taskId },
@@ -246,9 +224,10 @@ function clamp(n: number, min: number, max: number): number {
  * Met un run autonome en file. Le worker le prend en charge tout seul (cf.
  * [worker-runtime.ts](../../../lib/worker-runtime.ts)) : plus rien à lancer.
  *
- * L'action ne décide de rien qu'elle ne sache : sans « Modèle personnalisé » le
- * moteur reste `auto`, sans « Limites » les bornes restent `null`. Ce sont des
- * trous que la planification comblera, pas des défauts inventés ici.
+ * Un seul moteur désormais : l'agent Claude Code, qui travaille dans le
+ * workspace du projet sur l'abonnement de la machine. L'utilisateur ne donne que
+ * l'objectif ; sans « Limites », les bornes restent `null` et le worker les
+ * estime.
  */
 export async function startRunAction(
   _prev: RunFormState,
@@ -257,18 +236,8 @@ export async function startRunAction(
   const taskId = String(formData.get("taskId") ?? "");
   const goal = String(formData.get("goal") ?? "").trim();
 
-  // Cases « avancées » : tant qu'elles sont fermées, leurs champs ne comptent
-  // pas — un champ resté monté dans le DOM ne doit pas forcer une valeur que
-  // l'utilisateur ne voit plus.
-  const customModel = formData.get("customModel") === "on";
+  // Case « avancée » repliée par défaut : ses champs ne comptent que si ouverte.
   const customLimits = formData.get("customLimits") === "on";
-
-  const engineChoice = customModel
-    ? String(formData.get("engine") ?? "llm")
-    : "auto";
-  const isCli = engineChoice !== "llm" && engineChoice !== "auto";
-  const boost = customModel && formData.get("boost") === "on";
-
   const rawIterations = customLimits
     ? optionalNumber(formData.get("maxIterations"))
     : null;
@@ -279,43 +248,26 @@ export async function startRunAction(
     rawIterations === null ? null : clamp(rawIterations, 1, 20);
   const timeoutMin = rawTimeout === null ? null : clamp(rawTimeout, 1, 120);
 
-  // Le plafond est toujours lu : c'est le réglage principal, pas un avancé.
-  // 0 (le défaut) = « gratuit / abonnement uniquement ».
+  // Le plafond est toujours lu : c'est le réglage principal. 0 (le défaut) =
+  // « ne rien facturer » ; l'abonnement Claude reste gratuit au token.
   const maxCostUsd = clamp(optionalNumber(formData.get("maxCostUsd")) ?? 0, 0, 50);
 
-  if (!taskId) return { ok: false, message: "Tâche manquante." };
+  if (!taskId) return { ok: false, message: "Décris l'objectif du run." };
   if (!goal) return { ok: false, message: "Décris l'objectif du run." };
-
-  if (isCli && !isCliAgentId(engineChoice)) {
-    return { ok: false, message: `Moteur inconnu : « ${engineChoice} ».` };
-  }
 
   const userId = await getCurrentUserId();
   const ctx = await getTaskContext(userId, taskId);
   if (!ctx) return { ok: false, message: "Tâche introuvable." };
 
-  if (isCli) {
-    const status = cliAgentStatuses().find((s) => s.id === engineChoice);
-    if (!status?.available) {
-      return {
-        ok: false,
-        message:
-          status?.warning ?? `L'agent \`${engineChoice}\` n'est pas disponible.`,
-      };
-    }
-  } else {
-    // Un agent CLI s'authentifie avec son propre login : lui réclamer une clé
-    // LLM n'aurait aucun sens. En `auto`, l'abonnement peut suffire — on ne
-    // bloque donc que si RIEN n'est utilisable.
-    const keys = await getProviderConnections(userId);
-    const hasCli = cliAgentStatuses().some((s) => s.available);
-    if (Object.keys(keys).length === 0 && !(engineChoice === "auto" && hasCli)) {
-      return {
-        ok: false,
-        message:
-          "Aucune clé API ni agent CLI disponible. Ajoute une connexion sur /models avant de lancer.",
-      };
-    }
+  // Tout dépend de Claude Code, installé et authentifié sur la machine du worker.
+  const claude = cliAgentStatuses().find((s) => s.id === "claude");
+  if (!claude?.available) {
+    return {
+      ok: false,
+      message:
+        claude?.warning ??
+        "Claude Code (`claude`) n'est pas disponible sur la machine du worker.",
+    };
   }
 
   try {
@@ -326,9 +278,6 @@ export async function startRunAction(
 
   await enqueueRun(userId, taskId, {
     goal,
-    engine: isCli ? "cli" : engineChoice === "auto" ? "auto" : "llm",
-    engineCli: isCli ? engineChoice : undefined,
-    boost,
     maxIterations,
     maxCostUsd,
     timeoutMin,
@@ -337,9 +286,7 @@ export async function startRunAction(
   return {
     ok: true,
     message:
-      engineChoice === "auto"
-        ? "Run lancé. L'IA évalue la tâche, choisit la source et démarre — suis la progression ci-dessous."
-        : "Run lancé. Suis la progression ci-dessous.",
+      "Run lancé. Claude Code exécute la tâche — suis la progression ci-dessous.",
   };
 }
 
@@ -376,10 +323,6 @@ export async function chooseOptionAction(
   const option = status.pendingOptions.options[index];
   if (!option) return { ok: false, message: "Option invalide." };
 
-  const keys = await getProviderConnections(userId);
-  if (Object.keys(keys).length === 0) {
-    return { ok: false, message: "Aucune clé API disponible." };
-  }
   try {
     await assertWithinBudget(ctx.projectId);
   } catch (err) {
@@ -397,7 +340,7 @@ export async function chooseOptionAction(
   const startedAt = new Date();
 
   try {
-    const res = await produceCoworkArtifact(ctx, history, option, keys, norms.text);
+    const res = await produceCoworkArtifact(ctx, history, option, norms.text);
     const artifactId = await addArtifact(taskId, {
       type: "document",
       title: res.title,

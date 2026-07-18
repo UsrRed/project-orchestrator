@@ -27,29 +27,6 @@ import {
 
 // --- Enums ---------------------------------------------------------------
 
-/**
- * Providers d'exécution journalisés dans `agent_executions`.
- *
- * Les 7 premiers sont les providers LLM du routeur (type `Provider` de
- * [lib/models.ts](../lib/models.ts)). Les `*_cli` sont les agents CLI du moteur
- * `cli` ([lib/cli-agents.ts](../lib/cli-agents.ts)) : ce ne sont pas des appels
- * API mais des processus lancés sous le login du CLI. Les distinguer évite de
- * confondre un run `claude` sur abonnement avec un appel API `anthropic` dans
- * la lecture du coût.
- */
-export const providerEnum = pgEnum("provider", [
-  "anthropic",
-  "openai",
-  "google",
-  "openrouter",
-  "opencode",
-  "groq",
-  "ollama",
-  "claude_cli",
-  "gemini_cli",
-  "opencode_cli",
-]);
-
 export const projectTypeEnum = pgEnum("project_type", ["tech", "marketing"]);
 
 /** Rattachement d'un projet à un dépôt Git : aucun (local) ou dépôt GitHub. */
@@ -184,37 +161,6 @@ export const verificationTokens = pgTable(
   }),
 );
 
-/**
- * Connecteurs LLM de l'utilisateur (table historiquement « api_keys »).
- * Chaque ligne = une connexion à un provider, selon une `method` :
- *  - 'api_key' / 'oauth' : secret CHIFFRÉ dans `encrypted_key` (clé ou jeton) ;
- *  - 'none' : aucune credential (serveur local) → `encrypted_key` nul.
- */
-export const apiKeys = pgTable(
-  "api_keys",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    userId: uuid("user_id")
-      .notNull()
-      .references(() => users.id, { onDelete: "cascade" }),
-    provider: providerEnum("provider").notNull(),
-    /** Méthode de connexion : 'api_key' | 'oauth' | 'none'. */
-    method: text("method").notNull().default("api_key"),
-    label: text("label"),
-    /** Secret chiffré (clé API ou jeton OAuth). Nul pour la méthode 'none'. */
-    encryptedKey: text("encrypted_key"),
-    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
-    ...timestamps,
-  },
-  (t) => ({
-    byUserProvider: uniqueIndex("api_keys_user_provider_label_uq").on(
-      t.userId,
-      t.provider,
-      t.label,
-    ),
-  }),
-);
-
 export const projects = pgTable("projects", {
   id: uuid("id").primaryKey().defaultRandom(),
   userId: uuid("user_id")
@@ -275,9 +221,14 @@ export const agentExecutions = pgTable("agent_executions", {
   userId: uuid("user_id")
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
-  /** Libellé lisible de la requête routée (prompt tronqué, type de tâche). */
+  /** Libellé lisible de la requête (prompt tronqué, type de tâche). */
   taskLabel: text("task_label"),
-  provider: providerEnum("provider").notNull(),
+  /**
+   * Provider journalisé. Colonne `text` : le code n'écrit plus que `claude_cli`,
+   * mais les lignes historiques (`anthropic`, `ollama`…) restent lisibles — cf.
+   * la migration qui a converti l'ancien enum en texte.
+   */
+  provider: text("provider").notNull(),
   model: text("model").notNull(),
   tier: text("tier"),
   mode: taskModeEnum("mode").notNull().default("manual"),
@@ -391,17 +342,7 @@ export const profiles = pgTable("profiles", {
   defaultProjectType: projectTypeEnum("default_project_type")
     .notNull()
     .default("tech"),
-  preferredProvider: providerEnum("preferred_provider"),
   defaultBudgetUsd: numeric("default_budget_usd", { precision: 12, scale: 4 }),
-  /**
-   * Ordre de préférence des sources du routage autonome, en CSV
-   * (« local,subscription,free »). Cf. [lib/sources.ts](../lib/sources.ts).
-   *
-   * Une colonne texte plutôt qu'un tableau PG : la valeur est lue en bloc,
-   * jamais requêtée par élément, et `parseSourceOrder` la répare de toute façon
-   * — un type plus strict n'achèterait aucune garantie ici.
-   */
-  sourceOrder: text("source_order"),
   ...timestamps,
 });
 
@@ -450,50 +391,25 @@ export const autonomousRuns = pgTable("autonomous_runs", {
   goal: text("goal").notNull(),
   status: runStatusEnum("status").notNull().default("queued"),
   /**
-   * Moteur d'exécution : `auto` (résolu par le worker d'après le niveau estimé
-   * et l'ordre de sources du profil — le défaut), `llm` (routeur AI SDK) ou
-   * `cli` (agent CLI lancé dans le workspace du projet).
-   *
-   * `text` plutôt qu'un enum PG assumé : le registre des CLI bougera plus vite
-   * que les migrations, et `providerEnum` montre déjà le coût d'un enum à
-   * garder aligné à trois endroits.
+   * Justification des limites, affichée à l'utilisateur (« limites par défaut »
+   * ou « imposées »). Un seul moteur désormais : l'agent Claude Code.
    */
-  engine: text("engine").notNull().default("auto"),
-  /** Quel CLI quand `engine = 'cli'` : claude | gemini | opencode. */
-  engineCli: text("engine_cli"),
-  /**
-   * Mode « boost » : router vers le modèle le plus capable au lieu du moins
-   * cher atteignant le niveau requis. Ne concerne que `engine = 'llm'` (un
-   * agent CLI choisit son modèle lui-même).
-   */
-  boost: boolean("boost").notNull().default(false),
-  /**
-   * Niveau d'intelligence requis, estimé par l'IA à la planification (0-4).
-   * NULL tant que le run n'a pas été planifié.
-   */
-  plannedLevel: integer("planned_level"),
-  /** Justification du plan (niveau + limites), affichée à l'utilisateur. */
   planReason: text("plan_reason"),
-  /** `ai` | `heuristic` — ne pas faire passer une estimation pour une mesure. */
-  planner: text("planner"),
-  /** Source retenue par le routage : local | subscription | free | paid. */
-  sourceKind: text("source_kind"),
-  /** Étiquette lisible de la source retenue (« Abonnement — Claude Code »). */
+  /** Étiquette de la source — « Claude Code (abonnement) ». */
   sourceLabel: text("source_label"),
   /**
-   * Garde-fous. `NULL` = « à faire estimer par l'IA » ; une valeur = l'utilisateur
-   * a ouvert « Limites » et imposé la sienne, que la planification ne touche pas.
+   * Garde-fous. `NULL` = limite par défaut de l'agent ; une valeur = l'utilisateur
+   * a ouvert « Limites » et imposé la sienne.
    */
   maxIterations: integer("max_iterations"),
   /**
-   * Plafond de dépense. **0 est une valeur légitime** et le défaut : « n'entame
-   * pas mon crédit », donc local/abonnement/gratuit uniquement. À ne pas
-   * confondre avec un plafond atteint — cf. `guardStop` dans worker.ts.
+   * Plafond de dépense. **0 est une valeur légitime** et le défaut : « ne rien
+   * facturer ». À ne pas confondre avec un plafond atteint — cf. `guardStop`.
    */
   maxCostUsd: numeric("max_cost_usd", { precision: 12, scale: 6 })
     .notNull()
     .default("0"),
-  /** Minutes demandées. NULL = à estimer. `timeoutAt` en découle au démarrage. */
+  /** Minutes demandées. NULL = défaut. `timeoutAt` en découle au démarrage. */
   timeoutMin: integer("timeout_min"),
   timeoutAt: timestamp("timeout_at", { withTimezone: true }),
   killRequested: boolean("kill_requested").notNull().default(false),
@@ -502,19 +418,6 @@ export const autonomousRuns = pgTable("autonomous_runs", {
   spentUsd: numeric("spent_usd", { precision: 12, scale: 6 })
     .notNull()
     .default("0"),
-  /**
-   * Livrable en cours de rédaction : `{ title, content }`, remplacé à chaque
-   * itération par la version complète que le modèle renvoie.
-   *
-   * **Sans cette colonne, un moteur `llm` n'a nulle part où travailler** : il ne
-   * transmettait qu'une note de 1-2 phrases d'une étape à l'autre, si bien qu'il
-   * ne pouvait qu'annoncer ce qu'il allait faire, jamais le faire. C'est aussi ce
-   * qu'on sauve en artefact quand un garde-fou coupe le run, au lieu de jeter le
-   * travail.
-   *
-   * Sans objet pour le moteur `cli`, dont le livrable est le workspace lui-même.
-   */
-  draft: jsonb("draft"),
   /** Verrou de worker (claim) : horodatage de prise en charge. */
   lockedAt: timestamp("locked_at", { withTimezone: true }),
   /** Raison d'arrêt : completed | budget | iterations | timeout | killed | error. */
@@ -528,14 +431,9 @@ export const autonomousRuns = pgTable("autonomous_runs", {
 // --- Relations -----------------------------------------------------------
 
 export const usersRelations = relations(users, ({ many }) => ({
-  apiKeys: many(apiKeys),
   projects: many(projects),
   normes: many(normes),
   executions: many(agentExecutions),
-}));
-
-export const apiKeysRelations = relations(apiKeys, ({ one }) => ({
-  user: one(users, { fields: [apiKeys.userId], references: [users.id] }),
 }));
 
 export const projectsRelations = relations(projects, ({ one, many }) => ({
