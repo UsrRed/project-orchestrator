@@ -93,15 +93,23 @@ export default async function ProjectDetailPage({
               {project.type}
             </span>
           </form>
-          <form action={deleteProjectAction}>
-            <input type="hidden" name="projectId" value={project.id} />
-            <button
-              type="submit"
-              className="rounded px-2 py-1 text-xs text-red-400 transition hover:bg-red-950/50"
+          <div className="flex shrink-0 items-center gap-1">
+            <Link
+              href={`/projects/${project.id}/files`}
+              className="rounded px-2 py-1 text-xs text-neutral-300 transition hover:bg-neutral-800"
             >
-              Supprimer le projet
-            </button>
-          </form>
+              📁 Dossier du projet
+            </Link>
+            <form action={deleteProjectAction}>
+              <input type="hidden" name="projectId" value={project.id} />
+              <button
+                type="submit"
+                className="rounded px-2 py-1 text-xs text-red-400 transition hover:bg-red-950/50"
+              >
+                Supprimer le projet
+              </button>
+            </form>
+          </div>
         </div>
         {project.idea && (
           <p className="text-sm italic text-neutral-500">« {project.idea} »</p>
