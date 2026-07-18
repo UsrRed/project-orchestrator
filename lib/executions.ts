@@ -140,11 +140,17 @@ export async function recordClaudeExecution(
   }
 }
 
-/** Coût total réel dépensé sur un projet (somme des exécutions). */
-export async function projectSpendUsd(projectId: string): Promise<number> {
+/**
+ * Tokens totaux (entrée + sortie) consommés sur un projet — la somme des
+ * exécutions rattachées. C'est la mesure du budget par projet : chaque ligne
+ * d'`agent_executions` vient d'un appel **fait par l'app**, donc ce total n'est
+ * pas biaisé par l'usage de l'abonnement fait hors de l'app (contrairement au
+ * quota machine).
+ */
+export async function projectSpendTokens(projectId: string): Promise<number> {
   const [row] = await db
     .select({
-      total: sql<string>`coalesce(sum(${agentExecutions.costUsd}), 0)`,
+      total: sql<number>`coalesce(sum(${agentExecutions.promptTokens} + ${agentExecutions.completionTokens}), 0)::int`,
     })
     .from(agentExecutions)
     .where(eq(agentExecutions.projectId, projectId));
@@ -195,10 +201,10 @@ export interface ExecutionHealth {
   failed: number;
   succeeded: number;
   failureRate: number;
-  totalCostUsd: number;
+  totalTokens: number;
 }
 
-/** Santé des exécutions : total, échecs, taux d'échec, coût. */
+/** Santé des exécutions : total, échecs, taux d'échec, tokens. */
 export async function executionHealth(
   userId: string,
 ): Promise<ExecutionHealth> {
@@ -207,7 +213,7 @@ export async function executionHealth(
       total: sql<number>`count(*)::int`,
       failed: sql<number>`count(*) filter (where ${agentExecutions.status} = 'failed')::int`,
       succeeded: sql<number>`count(*) filter (where ${agentExecutions.status} = 'succeeded')::int`,
-      totalCostUsd: sql<string>`coalesce(sum(${agentExecutions.costUsd}), 0)`,
+      totalTokens: sql<number>`coalesce(sum(${agentExecutions.promptTokens} + ${agentExecutions.completionTokens}), 0)::int`,
     })
     .from(agentExecutions)
     .where(eq(agentExecutions.userId, userId));
@@ -219,7 +225,7 @@ export async function executionHealth(
     failed,
     succeeded: row?.succeeded ?? 0,
     failureRate: total > 0 ? failed / total : 0,
-    totalCostUsd: Number(row?.totalCostUsd ?? 0),
+    totalTokens: Number(row?.totalTokens ?? 0),
   };
 }
 

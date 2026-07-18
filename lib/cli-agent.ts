@@ -240,7 +240,7 @@ export function makeCliAgentDeps(userId: string, cliId: CliAgentId): WorkerDeps 
       return {
         done: false,
         note: `Agent \`${cli.id}\` interrompu (arrêt demandé ou budget projet dépassé).`,
-        costUsd: 0,
+        tokens: 0,
       };
     }
 
@@ -285,17 +285,24 @@ export function makeCliAgentDeps(userId: string, cliId: CliAgentId): WorkerDeps 
     const changes = await workspaceChanges(ws.path);
     const note = outcome.text.slice(0, NOTE_MAX_CHARS);
 
+    // Tokens de l'étape = somme (entrée + sortie) de tous les modèles traversés
+    // par l'invocation. C'est ce que le worker accumule et compare au plafond.
+    const stepTokens = outcome.usage.reduce(
+      (sum, u) => sum + u.inputTokens + u.outputTokens,
+      0,
+    );
+
     logInfo("cli_agent.step_done", {
       runId: ctx.runId,
       cli: cli.id,
-      costUsd: outcome.costUsd,
+      tokens: stepTokens,
       truncated: result.truncated,
     });
 
     return {
       done: true,
       note,
-      costUsd: outcome.costUsd,
+      tokens: stepTokens,
       artifact: {
         title: `${cli.label} — ${taskCtx.taskTitle}`,
         content: [

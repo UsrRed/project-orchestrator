@@ -139,7 +139,7 @@ export async function processNextQueuedRun(): Promise<boolean> {
       status: final.status,
       stopReason: final.stopReason,
       iterations: final.iterations,
-      spentUsd: final.spentUsd,
+      spentTokens: final.spentTokens,
       source: final.sourceLabel,
     });
   } catch (err) {

@@ -4,7 +4,7 @@
  * La table `autonomous_runs` EST la queue : les lignes `queued` sont réclamées
  * atomiquement par un worker via `FOR UPDATE SKIP LOCKED` (plusieurs workers
  * possibles sans double traitement), et les runs `running` dont le verrou est
- * périmé (worker mort) sont repris. La progression (coût, itérations) est
+ * périmé (worker mort) sont repris. La progression (tokens, itérations) est
  * persistée à CHAQUE étape → garde-fous vérifiables en continu, reprise après
  * crash.
  *
@@ -38,13 +38,13 @@ export interface RunRow {
   sourceLabel: string | null;
   /** Null = à estimer par le worker ; une valeur = imposée par l'utilisateur. */
   maxIterations: number | null;
-  /** 0 = ne rien facturer (défaut), pas « plafond atteint ». */
-  maxCostUsd: number;
+  /** Plafond de tokens du run. 0 = illimité (défaut), pas « plafond atteint ». */
+  maxTokens: number;
   timeoutMin: number | null;
   timeoutAt: Date | null;
   killRequested: boolean;
   iterations: number;
-  spentUsd: number;
+  spentTokens: number;
   lockedAt: Date | null;
   stopReason: string | null;
   error: string | null;
@@ -63,12 +63,12 @@ function mapRow(r: typeof autonomousRuns.$inferSelect): RunRow {
     planReason: r.planReason,
     sourceLabel: r.sourceLabel,
     maxIterations: r.maxIterations,
-    maxCostUsd: Number(r.maxCostUsd),
+    maxTokens: Number(r.maxTokens),
     timeoutMin: r.timeoutMin,
     timeoutAt: r.timeoutAt,
     killRequested: r.killRequested,
     iterations: r.iterations,
-    spentUsd: Number(r.spentUsd),
+    spentTokens: Number(r.spentTokens),
     lockedAt: r.lockedAt,
     stopReason: r.stopReason,
     error: r.error,
@@ -82,8 +82,8 @@ export interface EnqueueInput {
   goal: string;
   /** `undefined`/`null` → limite par défaut de l'agent CLI (1). */
   maxIterations?: number | null;
-  /** Défaut 0 : ne rien facturer. */
-  maxCostUsd?: number;
+  /** Plafond de tokens. Défaut 0 = illimité. */
+  maxTokens?: number;
   /** `undefined`/`null` → défaut. `timeoutAt` en découle au démarrage. */
   timeoutMin?: number | null;
 }
@@ -111,7 +111,7 @@ export async function enqueueRun(
       taskId,
       goal,
       maxIterations: input.maxIterations ?? null,
-      maxCostUsd: Math.max(input.maxCostUsd ?? 0, 0).toFixed(6),
+      maxTokens: Math.max(Math.round(input.maxTokens ?? 0), 0),
       timeoutMin: input.timeoutMin ?? null,
     })
     .returning({ id: autonomousRuns.id });
@@ -228,16 +228,16 @@ export async function getRunFresh(runId: string): Promise<RunRow | null> {
   return r ? mapRow(r) : null;
 }
 
-/** Ajoute le coût/incrémente l'itération après une étape (progression durable). */
+/** Ajoute les tokens/incrémente l'itération après une étape (progression durable). */
 export async function recordIteration(
   runId: string,
-  costDeltaUsd: number,
+  tokensDelta: number,
 ): Promise<void> {
   await db
     .update(autonomousRuns)
     .set({
       iterations: sql`${autonomousRuns.iterations} + 1`,
-      spentUsd: sql`${autonomousRuns.spentUsd} + ${costDeltaUsd.toFixed(6)}`,
+      spentTokens: sql`${autonomousRuns.spentTokens} + ${Math.max(Math.round(tokensDelta), 0)}`,
       lockedAt: sql`now()`,
     })
     .where(eq(autonomousRuns.id, runId));

@@ -2,10 +2,10 @@
  * Exécuteur de runs autonomes (Milestone 4).
  *
  * Boucle d'itérations avec garde-fous vérifiés à CHAQUE étape (cf. risque #6 du
- * plan : plafond de coût vérifié en continu, pas seulement en fin de run) :
+ * plan : plafond de tokens vérifié en continu, pas seulement en fin de run) :
  *  - kill switch (arrêt utilisateur) ;
  *  - nombre maximal d'itérations ;
- *  - plafond de coût (avant ET après accumulation) ;
+ *  - plafond de tokens (avant ET après accumulation) ;
  *  - timeout mural.
  *
  * La fonction d'étape (`stepFn`) et l'horloge (`now`) sont injectées → toute la
@@ -38,8 +38,8 @@ export interface StepResult {
   done: boolean;
   /** Note de progression (persistée dans le fil de la tâche). */
   note: string;
-  /** Coût réel de l'étape (accumulé et comparé au plafond). */
-  costUsd: number;
+  /** Tokens consommés par l'étape (accumulés et comparés au plafond). */
+  tokens: number;
   /** Artefact éventuel produit à cette étape. */
   artifact?: StepArtifact;
   /**
@@ -74,15 +74,15 @@ export interface WorkerDeps {
     artifact: StepArtifact,
     opts?: { salvaged?: boolean },
   ) => Promise<void>;
-  /** Garde-fou budget projet : true → arrêt (raison project_budget). */
+  /** Garde-fou budget projet : true → arrêt (raison project_tokens). */
   budgetExceeded?: (run: RunRow) => Promise<boolean>;
   now?: () => Date;
 }
 
 type StopReason =
   | "completed"
-  | "budget"
-  | "project_budget"
+  | "tokens"
+  | "project_tokens"
   | "iterations"
   | "timeout"
   | "killed"
@@ -91,12 +91,11 @@ type StopReason =
 /**
  * Évalue les garde-fous d'arrêt ; renvoie la raison ou null pour continuer.
  *
- * Le plafond de coût se lit en deux régimes, et les confondre était le bug qui
- * rendait « 0 » inutilisable : **0 ne veut pas dire « plafond atteint »**, il
- * veut dire « ce run ne doit rien coûter » (local/abonnement/gratuit). On
- * n'arrête donc que si une dépense apparaît malgré tout — ce qui ne devrait
- * jamais arriver, la source ayant été choisie gratuite, mais un run qui se met
- * à facturer en silence est exactement ce que ce garde-fou doit attraper.
+ * Le plafond est en **tokens**, et **0 = illimité** : un run consomme forcément
+ * des tokens, donc « 0 » ne peut pas vouloir dire « n'en consomme aucun » — ce
+ * serait un arrêt immédiat de tout run. On n'arrête que si un plafond explicite
+ * (> 0) est atteint. Les tokens d'un run sont mesurés par invocation (sortie du
+ * CLI), donc attribuables à CE run et non biaisés par l'usage hors de l'app.
  *
  * `maxIterations` peut être null (run pas encore planifié) : la boucle ne
  * tourne qu'après `applyPlan`, mais on ne se fie pas à cet ordre pour terminer.
@@ -105,17 +104,15 @@ function guardStop(run: RunRow, now: Date): StopReason | null {
   if (run.killRequested) return "killed";
   if (run.maxIterations === null) return "error";
   if (run.iterations >= run.maxIterations) return "iterations";
-  const overBudget =
-    run.maxCostUsd > 0 ? run.spentUsd >= run.maxCostUsd : run.spentUsd > 0;
-  if (overBudget) return "budget";
+  if (run.maxTokens > 0 && run.spentTokens >= run.maxTokens) return "tokens";
   if (run.timeoutAt && now.getTime() > run.timeoutAt.getTime()) return "timeout";
   return null;
 }
 
 const TERMINAL: Record<StopReason, "succeeded" | "failed" | "cancelled"> = {
   completed: "succeeded",
-  budget: "failed",
-  project_budget: "failed",
+  tokens: "failed",
+  project_tokens: "failed",
   iterations: "failed",
   timeout: "failed",
   killed: "cancelled",
@@ -157,7 +154,7 @@ export async function processRun(
       break;
     }
     if (deps.budgetExceeded && (await deps.budgetExceeded(fresh))) {
-      await stop("project_budget");
+      await stop("project_tokens");
       break;
     }
 
@@ -186,7 +183,7 @@ export async function processRun(
     if (result.note && deps.onNote) {
       await deps.onNote(fresh, result.note, result.meta);
     }
-    await recordIteration(runId, result.costUsd);
+    await recordIteration(runId, result.tokens);
     if (result.artifact && deps.onArtifact) {
       await deps.onArtifact(fresh, result.artifact);
     }
@@ -206,7 +203,7 @@ export async function processRun(
         break;
       }
       if (deps.budgetExceeded && (await deps.budgetExceeded(after))) {
-        await stop("project_budget");
+        await stop("project_tokens");
         break;
       }
     }
@@ -218,7 +215,7 @@ export async function processRun(
     status: done.status,
     stopReason: done.stopReason,
     iterations: done.iterations,
-    spentUsd: done.spentUsd,
+    spentTokens: done.spentTokens,
   });
   return done;
 }

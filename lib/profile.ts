@@ -2,7 +2,7 @@
  * Profil / préférences utilisateur (une ligne par compte).
  *
  * Personnalise le comportement de l'IA (langue, ton, type de projet par défaut)
- * et fournit une valeur par défaut de budget. `getProfile` renvoie des valeurs
+ * et fournit un plafond de tokens par défaut. `getProfile` renvoie des valeurs
  * par défaut si aucun profil n'est encore enregistré.
  */
 import "server-only";
@@ -18,7 +18,7 @@ export interface Profile {
   language: string;
   tone: string;
   defaultProjectType: ProjectType;
-  defaultBudgetUsd: number | null;
+  defaultBudgetTokens: number | null;
 }
 
 const DEFAULT_PROFILE: Profile = {
@@ -26,7 +26,7 @@ const DEFAULT_PROFILE: Profile = {
   language: "fr",
   tone: "neutre et professionnel",
   defaultProjectType: "tech",
-  defaultBudgetUsd: null,
+  defaultBudgetTokens: null,
 };
 
 export async function getProfile(userId: string): Promise<Profile> {
@@ -41,8 +41,8 @@ export async function getProfile(userId: string): Promise<Profile> {
     language: row.language,
     tone: row.tone,
     defaultProjectType: row.defaultProjectType as ProjectType,
-    defaultBudgetUsd:
-      row.defaultBudgetUsd != null ? Number(row.defaultBudgetUsd) : null,
+    defaultBudgetTokens:
+      row.defaultBudgetTokens != null ? Number(row.defaultBudgetTokens) : null,
   };
 }
 
@@ -51,7 +51,7 @@ export interface ProfilePatch {
   language?: string;
   tone?: string;
   defaultProjectType?: ProjectType;
-  defaultBudgetUsd?: number | null;
+  defaultBudgetTokens?: number | null;
 }
 
 export async function upsertProfile(
@@ -64,9 +64,9 @@ export async function upsertProfile(
     language: patch.language ?? DEFAULT_PROFILE.language,
     tone: (patch.tone ?? DEFAULT_PROFILE.tone).trim() || DEFAULT_PROFILE.tone,
     defaultProjectType: patch.defaultProjectType ?? "tech",
-    defaultBudgetUsd:
-      patch.defaultBudgetUsd != null && patch.defaultBudgetUsd > 0
-        ? patch.defaultBudgetUsd.toFixed(4)
+    defaultBudgetTokens:
+      patch.defaultBudgetTokens != null && patch.defaultBudgetTokens > 0
+        ? Math.round(patch.defaultBudgetTokens)
         : null,
   };
   await db

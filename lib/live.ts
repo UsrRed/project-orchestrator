@@ -34,8 +34,9 @@ export interface LiveAgent {
   iterations: number;
   /** Null tant que le run n'est pas planifié : la limite n'existe pas encore. */
   maxIterations: number | null;
-  spentUsd: number;
-  maxCostUsd: number;
+  spentTokens: number;
+  /** Plafond de tokens du run. 0 = illimité. */
+  maxTokens: number;
   /** Millisecondes écoulées depuis le démarrage ; null si encore en file. */
   elapsedMs: number | null;
 }
@@ -45,10 +46,9 @@ export interface LiveSnapshot {
   queued: number;
   agents: LiveAgent[];
   tokens: { prompt: number; completion: number; total: number };
-  costUsd: number;
   executions: { total: number };
   /** Consommation sur la dernière heure. */
-  recent: { tokens: number; costUsd: number; count: number; windowMs: number };
+  recent: { tokens: number; count: number; windowMs: number };
   /** Ventilation par (provider, modèle) : global, et sur la fenêtre live. */
   byModel: { global: ModelUsageRow[]; recent: ModelUsageRow[] };
   /** Quota d'abonnement Claude de la machine (null si non relevable). */
@@ -104,14 +104,17 @@ export async function liveSnapshot(
       engine: "claude",
       iterations: r.iterations,
       maxIterations: r.maxIterations,
-      spentUsd: r.spentUsd,
-      maxCostUsd: r.maxCostUsd,
+      spentTokens: r.spentTokens,
+      maxTokens: r.maxTokens,
       elapsedMs: r.startedAt ? now.getTime() - r.startedAt.getTime() : null,
     })),
     tokens: tokenTotals(stats),
-    costUsd: stats.totalCostUsd,
     executions: { total: stats.count },
-    recent: { ...recent, windowMs: RECENT_WINDOW_MS },
+    recent: {
+      tokens: recent.tokens,
+      count: recent.count,
+      windowMs: RECENT_WINDOW_MS,
+    },
     byModel: { global: byModelGlobal, recent: byModelRecent },
     claude,
   };
